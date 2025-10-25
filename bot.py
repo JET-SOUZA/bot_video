@@ -257,8 +257,7 @@ def webhook_asaas():
     return "OK", 200
 
 def run_flask():
-    import os
-app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 
 # -----------------------
 # Inicialização
@@ -295,4 +294,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
