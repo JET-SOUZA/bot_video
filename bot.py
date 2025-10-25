@@ -260,7 +260,7 @@ def run_flask():
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 
 # -----------------------
-# Inicialização
+# Inicialização (corrigida para PTB v20+)
 # -----------------------
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
@@ -273,26 +273,27 @@ def main():
             BotCommand("meuid", "Ver seu ID do Telegram")
         ])
 
-    bot_app = ApplicationBuilder().token(TOKEN).post_init(comandos_post_init).build()
+    async def run_bot():
+        app = ApplicationBuilder().token(TOKEN).post_init(comandos_post_init).build()
 
-    # Comandos principais
-    bot_app.add_handler(CommandHandler("start", start))
-    bot_app.add_handler(CommandHandler("planos", planos))
-    bot_app.add_handler(CommandHandler("duvida", duvida))
-    bot_app.add_handler(CommandHandler("meuid", meuid))
+        # Comandos principais
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(CommandHandler("planos", planos))
+        app.add_handler(CommandHandler("duvida", duvida))
+        app.add_handler(CommandHandler("meuid", meuid))
 
-    # Admin
-    bot_app.add_handler(CommandHandler("premiumadd", premiumadd))
-    bot_app.add_handler(CommandHandler("premiumdel", premiumdel))
-    bot_app.add_handler(CommandHandler("premiumlist", premiumlist))
+        # Admin
+        app.add_handler(CommandHandler("premiumadd", premiumadd))
+        app.add_handler(CommandHandler("premiumdel", premiumdel))
+        app.add_handler(CommandHandler("premiumlist", premiumlist))
 
-    # Mensagens de links
-    bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
+        # Mensagens com links
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
 
-    print("🤖 Bot iniciado... aguardando mensagens.")
-    bot_app.run_polling()
+        print("🤖 Bot iniciado... aguardando mensagens.")
+        await app.run_polling()
+
+    asyncio.run(run_bot())
 
 if __name__ == "__main__":
     main()
-
-
