@@ -3,3 +3,5 @@ requests==2.32.5
 pyppeteer==2.0.0
 Flask==3.1.0
 python-telegram-bot==20.7
+aiohttp==3.10.10
+
