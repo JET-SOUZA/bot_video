@@ -1,14 +1,14 @@
-# ============================== 
-# Jet_TikTokShop Bot v5.1 (Webhook 24/7 no Render)
+# ==============================
+# Jet_TikTokShop Bot v5.2 (Render 24/7)
 # ==============================
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
-import yt_dlp, os, json, aiohttp
+import os, json, asyncio, traceback
 from datetime import datetime, date
 from pathlib import Path
-import asyncio, traceback
-from flask import Flask, request
+import yt_dlp, aiohttp
+from flask import Flask
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
 # -----------------------
 # Configurações
@@ -55,7 +55,7 @@ def salvar_premium(usuarios):
     salvar_json(ARQUIVO_PREMIUM, {"premium_users": list(usuarios)})
 
 USUARIOS_PREMIUM = carregar_premium()
-USUARIOS_PREMIUM.update({ADMIN_ID})
+USUARIOS_PREMIUM.add(ADMIN_ID)
 salvar_premium(USUARIOS_PREMIUM)
 
 # -----------------------
@@ -175,32 +175,13 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(traceback.format_exc())
 
 # -----------------------
-# Flask + Webhook
+# Flask (apenas health check)
 # -----------------------
 flask_app = Flask(__name__)
 
 @flask_app.route('/')
 def home():
     return "🤖 Bot ativo no Render!"
-
-@flask_app.route("/webhook_telegram", methods=["POST"])
-def webhook_telegram():
-    try:
-        data = request.get_json(force=True)
-        print("📩 Webhook recebido:", data)
-
-        from telegram import Update
-        update = Update.de_json(data, bot_app.bot)
-
-        # ✅ Coloca o update na fila do Application
-        bot_app.update_queue.put_nowait(update)
-
-        return "OK", 200
-    except Exception as e:
-        import traceback
-        print("❌ Erro no webhook:", e)
-        print(traceback.format_exc())
-        return "ERROR", 500
 
 # -----------------------
 # Inicialização do bot
@@ -216,7 +197,19 @@ async def iniciar_bot():
     print("✅ Webhook configurado com sucesso!")
     return app
 
-bot_app = asyncio.get_event_loop().run_until_complete(iniciar_bot())
+# -----------------------
+# Loop principal
+# -----------------------
+async def main():
+    bot_app = await iniciar_bot()
+    await bot_app.initialize()
+    await bot_app.start()
+    await bot_app.updater.start_polling()  # Mantém o bot ativo processando updates
+    await bot_app.updater.idle()
 
 if __name__ == "__main__":
-    flask_app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+    # Inicia Flask e o bot no mesmo loop
+    port = int(os.environ.get("PORT", 5000))
+    loop = asyncio.get_event_loop()
+    loop.create_task(flask_app.run_task(host="0.0.0.0", port=port))
+    loop.run_until_complete(main())
