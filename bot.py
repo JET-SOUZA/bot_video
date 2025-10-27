@@ -1,14 +1,15 @@
 # ==============================
-# Jet_TikTokShop Bot v5.2 (Render 24/7)
+# Jet_TikTokShop Bot v5.4 (Webhook 100% Render)
 # ==============================
 
 import os, json, asyncio, traceback
 from datetime import datetime, date
 from pathlib import Path
 import yt_dlp, aiohttp
-from flask import Flask
+from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from threading import Thread
 
 # -----------------------
 # Configurações
@@ -175,15 +176,6 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(traceback.format_exc())
 
 # -----------------------
-# Flask (apenas health check)
-# -----------------------
-flask_app = Flask(__name__)
-
-@flask_app.route('/')
-def home():
-    return "🤖 Bot ativo no Render!"
-
-# -----------------------
 # Inicialização do bot
 # -----------------------
 async def iniciar_bot():
@@ -198,18 +190,44 @@ async def iniciar_bot():
     return app
 
 # -----------------------
+# Flask + webhook Telegram
+# -----------------------
+flask_app = Flask(__name__)
+
+@flask_app.route('/')
+def home():
+    return "🤖 Bot ativo no Render!"
+
+@flask_app.route("/webhook_telegram", methods=["POST"])
+def webhook_telegram():
+    data = request.get_json(force=True)
+    asyncio.create_task(process_update(data))
+    return "OK", 200
+
+async def process_update(data):
+    try:
+        from telegram import Update
+        update = Update.de_json(data, bot_app.bot)
+        await bot_app.update_queue.put(update)
+    except Exception as e:
+        print("❌ Erro processando update:", e)
+        print(traceback.format_exc())
+
+# -----------------------
 # Loop principal
 # -----------------------
 async def main():
+    global bot_app
     bot_app = await iniciar_bot()
     await bot_app.initialize()
     await bot_app.start()
-    await bot_app.updater.start_polling()  # Mantém o bot ativo processando updates
+    await bot_app.updater.start_polling()  # necessário para processar updates da queue
     await bot_app.updater.idle()
 
 if __name__ == "__main__":
-    # Inicia Flask e o bot no mesmo loop
     port = int(os.environ.get("PORT", 5000))
+    # Flask em thread separada
+    Thread(target=lambda: flask_app.run(host="0.0.0.0", port=port, use_reloader=False)).start()
+    # Bot principal
     loop = asyncio.get_event_loop()
-    loop.create_task(flask_app.run_task(host="0.0.0.0", port=port))
     loop.run_until_complete(main())
