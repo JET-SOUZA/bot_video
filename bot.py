@@ -2,7 +2,7 @@
 # Jet_TikTokShop Bot v5.1 (Webhook 24/7 no Render)
 # ==============================
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, BotCommand
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 import yt_dlp, os, json, aiohttp
 from datetime import datetime, date
@@ -187,19 +187,20 @@ def home():
 def webhook_telegram():
     try:
         data = request.get_json(force=True)
-        print("📩 Webhook recebido:", data)  # Loga a atualização completa
+        print("📩 Webhook recebido:", data)
 
         from telegram import Update
         update = Update.de_json(data, bot_app.bot)
 
-        asyncio.get_event_loop().create_task(bot_app.process_update(update))
+        # ✅ Coloca o update na fila do Application
+        bot_app.update_queue.put_nowait(update)
+
         return "OK", 200
     except Exception as e:
         import traceback
         print("❌ Erro no webhook:", e)
-        print(traceback.format_exc())  # Mostra detalhes
+        print(traceback.format_exc())
         return "ERROR", 500
-
 
 # -----------------------
 # Inicialização do bot
@@ -219,4 +220,3 @@ bot_app = asyncio.get_event_loop().run_until_complete(iniciar_bot())
 
 if __name__ == "__main__":
     flask_app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
-
