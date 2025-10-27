@@ -14,7 +14,7 @@ from flask import Flask, request
 # -----------------------
 # Configurações
 # -----------------------
-TOKEN = os.getenv("BOT_TOKEN", "SEU_TOKEN_AQUI")  # Defina no Render → Environment Variables
+TOKEN = os.getenv(8249697837:AAGfvejL5PT9w8sSPMZnIwErh0jX-XMpAPE)  # Defina no Render → Environment Variables
 ADMIN_ID = 5593153639
 LIMITE_DIARIO = 10
 
@@ -242,3 +242,4 @@ def webhook_telegram():
 
 if __name__ == "__main__":
     flask_app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
