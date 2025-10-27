@@ -260,7 +260,7 @@ def run_flask():
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 
 # -----------------------
-# Inicialização (corrigida para PTB v20+)
+# Inicialização (corrigida para Render e PTB v20+)
 # -----------------------
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
@@ -293,7 +293,13 @@ def main():
         print("🤖 Bot iniciado... aguardando mensagens.")
         await app.run_polling()
 
-    asyncio.run(run_bot())
+    # Compatibilidade com Render (loop já rodando)
+    try:
+        asyncio.run(run_bot())
+    except RuntimeError:
+        loop = asyncio.get_event_loop()
+        loop.create_task(run_bot())
+        loop.run_forever()
 
 if __name__ == "__main__":
     main()
