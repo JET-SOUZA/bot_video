@@ -183,16 +183,23 @@ flask_app = Flask(__name__)
 def home():
     return "🤖 Bot ativo no Render!"
 
-@flask_app.route('/webhook_telegram', methods=['POST'])
+@flask_app.route("/webhook_telegram", methods=["POST"])
 def webhook_telegram():
     try:
         data = request.get_json(force=True)
-        update = Update.model_validate(data)
+        print("📩 Webhook recebido:", data)  # Loga a atualização completa
+
+        from telegram import Update
+        update = Update.de_json(data, bot_app.bot)
+
         asyncio.get_event_loop().create_task(bot_app.process_update(update))
+        return "OK", 200
     except Exception as e:
+        import traceback
         print("❌ Erro no webhook:", e)
+        print(traceback.format_exc())  # Mostra detalhes
         return "ERROR", 500
-    return "OK", 200
+
 
 # -----------------------
 # Inicialização do bot
@@ -212,3 +219,4 @@ bot_app = asyncio.get_event_loop().run_until_complete(iniciar_bot())
 
 if __name__ == "__main__":
     flask_app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
