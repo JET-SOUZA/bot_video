@@ -236,7 +236,7 @@ async def premiumlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"💎 Usuários Premium:\n{lista}")
 
 # -----------------------
-# Webhook Flask Asaas
+# Webhook Flask Asaas com logs
 # -----------------------
 flask_app = Flask(__name__)
 
@@ -246,18 +246,26 @@ def webhook_asaas():
     status = data.get("status")
     telegram_id = int(data.get("metadata", {}).get("telegram_id", 0))
     if telegram_id == 0:
+        print("⚠️ Webhook recebido sem Telegram ID!")
         return "No telegram ID", 400
+
     if status == "CONFIRMED":
         USUARIOS_PREMIUM.add(telegram_id)
         salvar_premium(USUARIOS_PREMIUM)
+        print(f"✅ Pagamento confirmado para Telegram ID {telegram_id}. Usuário Premium liberado.")
     elif status in ["CANCELED", "EXPIRED"]:
         if telegram_id in USUARIOS_PREMIUM:
             USUARIOS_PREMIUM.remove(telegram_id)
             salvar_premium(USUARIOS_PREMIUM)
+        print(f"⚠️ Pagamento {status} para Telegram ID {telegram_id}. Premium removido.")
+    else:
+        print(f"ℹ️ Status desconhecido '{status}' recebido para Telegram ID {telegram_id}.")
+
     return "OK", 200
 
 def run_flask():
     port = int(os.environ.get("PORT", 5000))  # Usa porta do Render ou default 5000
+    print(f"🌐 Flask rodando na porta {port}...")
     flask_app.run(host="0.0.0.0", port=port)
 
 # -----------------------
