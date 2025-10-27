@@ -1,5 +1,5 @@
 # ==============================
-# Jet_TikTokShop Bot v5.4 (Webhook 100% Render)
+# Jet_TikTokShop Bot v5.5 (Webhook 24/7 no Render)
 # ==============================
 
 import os, json, asyncio, traceback
@@ -221,8 +221,8 @@ async def main():
     bot_app = await iniciar_bot()
     await bot_app.initialize()
     await bot_app.start()
-    await bot_app.updater.start_polling()  # necessário para processar updates da queue
-    await bot_app.updater.idle()
+    print("🤖 Bot rodando via webhook!")
+    await asyncio.Event().wait()  # mantém o loop ativo
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
