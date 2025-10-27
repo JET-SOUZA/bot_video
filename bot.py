@@ -237,9 +237,15 @@ def home():
 
 @flask_app.route("/webhook_telegram", methods=["POST"])
 def webhook_telegram():
-    update = Update.de_json(request.get_json(force=True), bot_app.bot)
-    asyncio.get_event_loop().create_task(bot_app.process_update(update))
+    try:
+        update = Update.model_validate(request.get_json(force=True))
+        asyncio.get_event_loop().create_task(bot_app.update_queue.put(update))
+    except Exception as e:
+        print("❌ Erro no webhook:", e)
+        return "ERROR", 500
     return "OK", 200
+
 
 if __name__ == "__main__":
     flask_app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
