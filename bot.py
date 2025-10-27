@@ -148,7 +148,6 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Preparando download...", parse_mode="Markdown")
 
     try:
-        # Resolver links curtos
         if "pin.it/" in texto:
             async with aiohttp.ClientSession() as session:
                 async with session.get(texto, allow_redirects=True) as resp:
@@ -169,7 +168,6 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "no_warnings": True
         }
 
-        # TikTok cookies
         if COOKIES_TIKTOK.exists():
             ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
 
@@ -236,7 +234,7 @@ async def premiumlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"💎 Usuários Premium:\n{lista}")
 
 # -----------------------
-# Webhook Flask Asaas com logs
+# Webhook Flask Asaas
 # -----------------------
 flask_app = Flask(__name__)
 
@@ -264,12 +262,12 @@ def webhook_asaas():
     return "OK", 200
 
 def run_flask():
-    port = int(os.environ.get("PORT", 5000))  # Usa porta do Render ou default 5000
+    port = int(os.environ.get("PORT", 5000))
     print(f"🌐 Flask rodando na porta {port}...")
     flask_app.run(host="0.0.0.0", port=port)
 
 # -----------------------
-# Inicialização (compatível Render/PTB v20+)
+# Inicialização (Render/PTB v20+)
 # -----------------------
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
@@ -300,14 +298,19 @@ def main():
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
 
         print("🤖 Bot iniciado... aguardando mensagens.")
-        await app.run_polling()
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling()
+        await app.updater.idle()
 
     try:
-        asyncio.run(run_bot())
-    except RuntimeError:
         loop = asyncio.get_event_loop()
-        loop.create_task(run_bot())
-        loop.run_forever()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    loop.create_task(run_bot())
+    loop.run_forever()
 
 if __name__ == "__main__":
     main()
