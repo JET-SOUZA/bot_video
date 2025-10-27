@@ -18,7 +18,7 @@ TOKEN = os.getenv(8249697837:AAGfvejL5PT9w8sSPMZnIwErh0jX-XMpAPE)  # Defina no R
 ADMIN_ID = 5593153639
 LIMITE_DIARIO = 10
 
-ASAAS_API_KEY = os.getenv("ASAAS_API_KEY", "SUA_CHAVE_ASAAS_AQUI")
+ASAAS_API_KEY = os.getenv("ASAAS_API_KEY", "$aact_prod_000MzkwODA2MWY2OGM3MWRlMDU2NWM3MzJlNzZmNGZhZGY6OjQxNTY4M2IzLTU1M2UtNGEyNS05ODQ5LTUzM2Q1OTBiYzdiZTo6JGFhY2hfNGU1ZmE3OGEtMzliNS00OTZlLWFmMGMtNDMzN2VlMzM1Yjlh")
 ASAAS_BASE_URL = "https://www.asaas.com/api/v3"
 
 ARQUIVO_CONTADOR = "downloads.json"
@@ -242,4 +242,5 @@ def webhook_telegram():
 
 if __name__ == "__main__":
     flask_app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
