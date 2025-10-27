@@ -257,10 +257,11 @@ def webhook_asaas():
     return "OK", 200
 
 def run_flask():
-    flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    port = int(os.environ.get("PORT", 5000))  # Usa porta do Render ou default 5000
+    flask_app.run(host="0.0.0.0", port=port)
 
 # -----------------------
-# Inicialização (corrigida para Render e PTB v20+)
+# Inicialização (compatível Render/PTB v20+)
 # -----------------------
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
@@ -293,7 +294,6 @@ def main():
         print("🤖 Bot iniciado... aguardando mensagens.")
         await app.run_polling()
 
-    # Compatibilidade com Render (loop já rodando)
     try:
         asyncio.run(run_bot())
     except RuntimeError:
