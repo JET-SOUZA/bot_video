@@ -1,6 +1,7 @@
 # ============================== 
 # Jet_TikTokShop Bot v4.5
 # Downloads + Premium Dinâmico via Asaas + Ver ID (menu) + TikTok com cookies
+# Corrigido para PTB v20+ e Render 24/7
 # ==============================
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, BotCommand
@@ -29,7 +30,6 @@ SCRIPT_DIR = Path(__file__).parent.resolve()
 DOWNLOADS_DIR = SCRIPT_DIR / "downloads"
 DOWNLOADS_DIR.mkdir(exist_ok=True)
 
-# Caminho do arquivo de cookies do TikTok
 COOKIES_TIKTOK = SCRIPT_DIR / "cookies.txt"
 
 # -----------------------
@@ -57,7 +57,6 @@ def salvar_premium(usuarios):
 
 USUARIOS_PREMIUM = carregar_premium()
 
-# IDs Premium fixos
 ID_PREMIUM_1 = 5593153639
 ID_PREMIUM_2 = 0
 ID_PREMIUM_3 = 0
@@ -300,8 +299,7 @@ def main():
         print("🤖 Bot iniciado... aguardando mensagens.")
         await app.initialize()
         await app.start()
-        await app.updater.start_polling()
-        await app.updater.idle()
+        await app.run_polling()
 
     try:
         loop = asyncio.get_event_loop()
@@ -311,6 +309,7 @@ def main():
 
     loop.create_task(run_bot())
     loop.run_forever()
+
 
 if __name__ == "__main__":
     main()
