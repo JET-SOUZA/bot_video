@@ -438,3 +438,4 @@ if __name__ == "__main__":
         flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
     except (KeyboardInterrupt, SystemExit):
         print("Bot encerrado.")
+
