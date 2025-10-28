@@ -1,5 +1,5 @@
 # ==============================
-# Jet_TikTokShop Bot v5.5 (Render Webhook 24/7)
+# Jet_TikTokShop Bot v5.6 (Render Webhook 24/7) — versão corrigida
 # ==============================
 
 import os, json, asyncio, traceback
@@ -193,7 +193,7 @@ async def iniciar_bot():
     return app
 
 # -----------------------
-# Flask + Webhook Telegram (corrigido para Render)
+# Flask + Webhook Telegram (corrigido)
 # -----------------------
 flask_app = Flask(__name__)
 
@@ -202,17 +202,28 @@ def home():
     return "🤖 Bot ativo no Render!"
 
 @flask_app.route("/webhook_telegram", methods=["POST"])
-async def webhook_telegram():
-    """Recebe atualizações do Telegram e processa corretamente"""
-    data = request.get_json(force=True)
+def webhook_telegram():
+    """Versão síncrona compatível com Flask no Render"""
+    try:
+        data = request.get_json(force=True)
+        if not data:
+            print("⚠️ Nenhum dado recebido.")
+            return "No data", 400
+
+        asyncio.run(process_update(data))
+        return "OK", 200
+    except Exception as e:
+        print("❌ Erro no webhook:", e)
+        print(traceback.format_exc())
+        return "Internal Server Error", 500
+
+async def process_update(data):
     try:
         update = Update.de_json(data, bot_app.bot)
         await bot_app.process_update(update)
     except Exception as e:
-        print("❌ Erro no webhook:", e)
+        print("❌ Erro processando update:", e)
         print(traceback.format_exc())
-        return "Erro interno", 500
-    return "OK", 200
 
 # -----------------------
 # Loop principal
