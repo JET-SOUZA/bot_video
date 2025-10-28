@@ -1,5 +1,5 @@
 # ==============================
-# Jet_TikTokShop Bot v6.0 (Render Webhook Stable)
+# Jet_TikTokShop Bot v6.1 (Render Webhook Stable)
 # ==============================
 
 import os, json, asyncio, traceback
@@ -12,6 +12,7 @@ nest_asyncio.apply()
 from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from asyncio import run_coroutine_threadsafe
 
 # -----------------------
 # Configurações
@@ -196,7 +197,11 @@ def webhook_telegram():
     try:
         data = request.get_json(force=True)
         update = Update.de_json(data, bot_app.bot)
-        asyncio.create_task(bot_app.process_update(update))
+
+        # Correção principal: enviar coroutine para o loop do bot
+        loop = bot_app._loop
+        run_coroutine_threadsafe(bot_app.process_update(update), loop)
+
     except Exception as e:
         print("❌ Erro no webhook:", e)
         print(traceback.format_exc())
@@ -231,6 +236,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
-
