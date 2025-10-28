@@ -1,184 +1,79 @@
-# bot_render.py
 import os
-import json
-import asyncio
-import traceback
-from datetime import datetime, date, timedelta
-from pathlib import Path
+import requests
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-import aiohttp
-import yt_dlp
-from flask import Flask, request
-from telegram import Update, BotCommand, ReplyKeyboardRemove
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    filters,
-    ContextTypes,
-)
-
-# ==========================
-# CONFIGURAÇÕES
-# ==========================
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # ex: https://bot-video-mgli.onrender.com/webhook_telegram
-ADMIN_ID = int(os.environ.get("ADMIN_ID", 0))
-
-SCRIPT_DIR = Path(__file__).parent.resolve()
-DOWNLOADS_DIR = SCRIPT_DIR / "downloads"
-DOWNLOADS_DIR.mkdir(exist_ok=True)
-COOKIES_TIKTOK = SCRIPT_DIR / "cookies.txt"
-
+# ------------------- CONFIGURAÇÃO -------------------
+TOKEN = "8249697837:AAGfvejL5PT9w8sSPMZnIwErh0jX-XMpAPE"
+ADMIN_ID = 5593153639
 LIMITE_DIARIO = 10
-MAX_VIDEO_MB_SEND = 50
 
-# ==========================
-# FLASK APP
-# ==========================
-flask_app = Flask(__name__)
+ASAAS_API_KEY = "$aact_prod_000MzkwODA2MWY2OGM3MWRlMDU2NWM3MzJlNzZmNGZhZGY6OmE2MTJlYWY3LWUyYWItNGJmNS05YjNmLWFiMTI3Mzc2NjMwZDo6JGFhY2hfZTIzNDcwY2MtNjI1Ni00NGQ3LTlhODgtNWYzZTFmNzM5YmY0"
+ASAAS_BASE_URL = "https://www.asaas.com/api/v3"
 
-# ==========================
-# UTILS
-# ==========================
-def carregar_json(caminho: Path):
-    if caminho.exists():
-        try:
-            return json.loads(caminho.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
-    return {}
+WEBHOOK_URL = "https://bot-video-mgli.onrender.com/webhook_telegram"  # Substitua pelo seu URL real
+PORT = int(os.environ.get("PORT", 10000))
 
-def salvar_json(caminho: Path, dados: dict):
-    caminho.write_text(json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")
+# Dicionário para controlar limite diário
+usuarios_limite = {}
 
-ARQUIVO_CONTADOR = SCRIPT_DIR / "downloads.json"
+# ------------------- HANDLERS -------------------
 
-def carregar_contador():
-    return carregar_json(ARQUIVO_CONTADOR)
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Olá! Bot ativo ✅\nUse /meuid para ver seu ID.\nUse /premium para acessar funções premium."
+    )
 
-def salvar_contador(dados: dict):
-    salvar_json(ARQUIVO_CONTADOR, dados)
-
-# ==========================
-# HANDLERS
-# ==========================
-async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = "🎬 *Bem-vindo ao bot!* Envie um link do vídeo para baixar."
-    await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=ReplyKeyboardRemove())
-
-async def meuid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"🆔 Seu Telegram ID: `{update.effective_user.id}`", parse_mode="Markdown")
-
-async def baixar_video_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    texto = update.message.text.strip()
+async def meuid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
+    await update.message.reply_text(f"Seu ID é: {user_id}")
 
-    if not texto.startswith("http"):
-        await update.message.reply_text("❌ Envie um link válido.")
+async def premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    await update.message.reply_text("Função Premium ainda em desenvolvimento ⭐")
+
+async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    texto = update.message.text
+
+    # Controle de limite diário
+    if user_id not in usuarios_limite:
+        usuarios_limite[user_id] = 0
+    if usuarios_limite[user_id] >= LIMITE_DIARIO:
+        await update.message.reply_text("Você atingiu o limite diário de uso. Tente amanhã.")
+        return
+    usuarios_limite[user_id] += 1
+
+    # Função de vídeo (exemplo)
+    if "vídeo" in texto.lower():
+        await update.message.reply_text("Função de vídeo em desenvolvimento 🎬")
         return
 
-    dados = carregar_contador()
-    hoje = str(date.today())
-    if str(user_id) not in dados or dados[str(user_id)].get("data") != hoje:
-        dados[str(user_id)] = {"data": hoje, "downloads": 0}
-
-    if dados[str(user_id)]["downloads"] >= LIMITE_DIARIO:
-        await update.message.reply_text("⚠️ Limite diário atingido.")
+    # Função ASAAS (exemplo)
+    if "asaas" in texto.lower():
+        await update.message.reply_text("Função ASAAS em desenvolvimento 💳")
         return
 
-    status_msg = await update.message.reply_text("⏳ Preparando download...")
-    try:
-        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        out_template = str(DOWNLOADS_DIR / f"%(id)s-{timestamp}.%(ext)s")
-        ydl_opts = {
-            "outtmpl": out_template,
-            "format": "bestvideo+bestaudio/best",
-            "merge_output_format": "mp4",
-            "noplaylist": True,
-            "ignoreerrors": True,
-        }
-        if COOKIES_TIKTOK.exists():
-            ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
+    # Mensagem padrão
+    await update.message.reply_text(f"Você disse: {texto}")
 
-        def run_ydl(url):
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                return info, ydl
+# ------------------- CONFIGURAÇÃO DO BOT -------------------
 
-        loop = asyncio.get_running_loop()
-        info, ydl_obj = await loop.run_in_executor(None, lambda: run_ydl(texto))
+app = ApplicationBuilder().token(TOKEN).build()
 
-        candidato = ydl_obj.prepare_filename(info)
-        tamanho_mb = Path(candidato).stat().st_size / (1024 * 1024)
-        with open(candidato, "rb") as f:
-            if tamanho_mb > MAX_VIDEO_MB_SEND:
-                await update.message.reply_document(f, caption="✅ Aqui está seu vídeo (documento).")
-            else:
-                await update.message.reply_video(f, caption="✅ Aqui está seu vídeo em alta qualidade!")
+# Adiciona handlers
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("meuid", meuid))
+app.add_handler(CommandHandler("premium", premium))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
-        dados[str(user_id)]["downloads"] += 1
-        salvar_contador(dados)
-
-        await update.message.reply_text(
-            f"📊 Uso diário: *{dados[str(user_id)]['downloads']}/{LIMITE_DIARIO}*", parse_mode="Markdown"
-        )
-        Path(candidato).unlink(missing_ok=True)
-        await status_msg.delete()
-    except Exception as e:
-        print(traceback.format_exc())
-        await update.message.reply_text(f"❌ Erro ao baixar: {e}")
-
-# ==========================
-# FLASK WEBHOOK
-# ==========================
-bot_app = None  # Application global
-
-@flask_app.route("/webhook_telegram", methods=["POST"])
-def webhook_telegram():
-    global bot_app
-    if bot_app is None:
-        return "Bot ainda não inicializado", 503
-    data = request.get_json(force=True)
-    update = Update.de_json(data, bot_app.bot)
-    bot_app.update_queue.put_nowait(update)
-    return "OK", 200
-
-@flask_app.route("/", methods=["GET"])
-def index():
-    return "🤖 Bot ativo!", 200
-
-# ==========================
-# MAIN
-# ==========================
-async def start_bot():
-    global bot_app
-    bot_app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    # Handlers
-    bot_app.add_handler(CommandHandler("start", start_handler))
-    bot_app.add_handler(CommandHandler("meuid", meuid_handler))
-    bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video_handler))
-
-    # Comandos
-    async def _post_init(a):
-        await a.bot.set_my_commands([
-            BotCommand("start", "Iniciar"),
-            BotCommand("meuid", "Ver seu ID"),
-        ])
-    bot_app.post_init = _post_init
-
-    await bot_app.initialize()
-    await bot_app.start()
-    await bot_app.bot.set_webhook(WEBHOOK_URL)
-    print("✅ Webhook ativo em:", WEBHOOK_URL)
+# ------------------- RODA O WEBHOOK -------------------
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    from threading import Thread
-
-    # Rodar Flask em thread separada
-    Thread(target=lambda: flask_app.run(host="0.0.0.0", port=port), daemon=True).start()
-
-    # Rodar bot
-    asyncio.run(start_bot())
+    print("Bot iniciado... aguardando mensagens")
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path="webhook_telegram",
+        webhook_url=WEBHOOK_URL
+    )
