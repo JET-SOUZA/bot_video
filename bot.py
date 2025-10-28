@@ -1,5 +1,5 @@
 # bot.py
-# Jet_TikTokShop Bot v4.6 - Planos + Notificações + Lembrete 1 dia antes
+# Jet_TikTokShop Bot v4.7 - Planos + Notificações + Lembretes avançados
 # Adaptado para Render (webhook + Flask + background task)
 
 import os
@@ -11,7 +11,7 @@ from pathlib import Path
 
 import aiohttp
 import yt_dlp
-from flask import Flask, request, redirect
+from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, BotCommand
 from telegram.ext import (
     ApplicationBuilder,
@@ -19,6 +19,7 @@ from telegram.ext import (
     MessageHandler,
     ContextTypes,
     filters,
+    CallbackQueryHandler,
 )
 
 # -----------------------
@@ -67,33 +68,21 @@ def carregar_json(caminho: Path):
             return {}
     return {}
 
-
 def salvar_json(caminho: Path, dados):
     caminho.write_text(json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")
 
-# premium.json estrutura:
-# {"premium_users": {"<telegram_id>": "YYYY-MM-DD", ...}}
 def carregar_premium():
     dados = carregar_json(ARQUIVO_PREMIUM)
     return dados.get("premium_users", {})
 
-
 def salvar_premium(dct):
     salvar_json(ARQUIVO_PREMIUM, {"premium_users": dct})
 
-# contador de downloads (downloads.json)
 def carregar_contador():
     return carregar_json(ARQUIVO_CONTADOR)
 
-
 def salvar_contador(dados):
     salvar_json(ARQUIVO_CONTADOR, dados)
-
-# -----------------------
-# Telegram / Flask setup
-# -----------------------
-flask_app = Flask(__name__)
-app = None  # ApplicationBuilder result será armazenado aqui
 
 # -----------------------
 # Helpers de assinatura
@@ -108,7 +97,6 @@ def usuario_eh_premium(telegram_id: int):
         return exp >= date.today()
     except Exception:
         return False
-
 
 def set_premium_for(telegram_id: int, dias: int):
     premium = carregar_premium()
@@ -127,7 +115,6 @@ def set_premium_for(telegram_id: int, dias: int):
     salvar_premium(premium)
     return premium[key]
 
-
 def remove_premium(telegram_id: int):
     premium = carregar_premium()
     key = str(telegram_id)
@@ -143,7 +130,7 @@ async def criar_cobranca_asaas(session: aiohttp.ClientSession, telegram_id: int,
     if not plano:
         raise ValueError("Plano inválido")
     payload = {
-        "customer": "CUS_ID_DO_CLIENTE",  # opcional: trocar se você tiver cliente cadastrado no Asaas
+        "customer": "CUS_ID_DO_CLIENTE",  # opcional
         "billingType": "PIX",
         "value": round(plano["valor"], 2),
         "dueDate": date.today().strftime("%Y-%m-%d"),
@@ -153,7 +140,6 @@ async def criar_cobranca_asaas(session: aiohttp.ClientSession, telegram_id: int,
     headers = {"access_token": ASAAS_API_KEY, "Content-Type": "application/json"}
     async with session.post(f"{ASAAS_BASE_URL}/payments", json=payload, headers=headers) as resp:
         data = await resp.json()
-        # tenta campos comuns que o Asaas pode retornar
         link = data.get("pixQrCode") or data.get("paymentLink") or data.get("invoiceUrl") or None
         return {"raw": data, "link": link}
 
@@ -168,22 +154,12 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=ReplyKeyboardRemove())
 
-
 async def planos_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # envia link para a página /planos já com telegram_id para permitir checkout direto
-    telegram_id = update.effective_user.id
-    if WEBHOOK_URL:
-        base_url = WEBHOOK_URL.replace("/webhook_telegram", "")
-    else:
-        # fallback - tente montar baseado no host
-        base_url = request.url_root.rstrip("/") if request else ""
-    link_planos = f"{base_url}/planos?telegram_id={telegram_id}"
-    await update.message.reply_text(
-        f"💎 Veja os planos Premium disponíveis e escolha o seu:\n\n👉 {link_planos}"
-    )
+    buttons = [[InlineKeyboardButton(f"{p['descricao']} — R${p['valor']:.2f}", callback_data=f"plan:{key}")]
+               for key, p in PLANOS.items()]
+    markup = InlineKeyboardMarkup(buttons)
+    await update.message.reply_text("Escolha um plano:", reply_markup=markup)
 
-
-# Mantemos o callback handler como fallback (para quem quiser pagar direto pelo Telegram)
 async def planos_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -203,10 +179,8 @@ async def planos_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             await query.edit_message_text(f"Erro ao criar pagamento: {e}")
 
-
 async def duvida_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📞 Contato: lavimurtha@gmail.com")
-
 
 async def meuid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🆔 Seu Telegram ID é: `{update.effective_user.id}`", parse_mode="Markdown")
@@ -309,7 +283,6 @@ async def premiumlist_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     lines = [f"{uid} — expira em {exp}" for uid, exp in premium.items()]
     await update.message.reply_text("💎 Usuários Premium:\n" + "\n".join(lines))
 
-
 async def forceadd_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
@@ -323,7 +296,6 @@ async def forceadd_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ Adicionado {tid} até {venc}")
     except Exception as e:
         await update.message.reply_text(f"Erro: {e}")
-
 
 async def forcedel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -341,13 +313,14 @@ async def forcedel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # -----------------------
 # Webhook routes
 # -----------------------
+flask_app = Flask(__name__)
+
 @flask_app.route("/webhook_telegram", methods=["POST"])
 def webhook_telegram():
     data = request.get_json(force=True)
     update = Update.de_json(data, app.bot)
     app.update_queue.put_nowait(update)
     return "OK", 200
-
 
 @flask_app.route("/webhook_asaas", methods=["POST"])
 def webhook_asaas():
@@ -366,92 +339,6 @@ def webhook_asaas():
             asyncio.create_task(_notify_payment_canceled(telegram_id, plan_key, status))
     return "OK", 200
 
-
-# -----------------------
-# PÁGINA /planos e /criar_pagamento (integração Asaas)
-# -----------------------
-@flask_app.route("/planos", methods=["GET"])
-def planos_page():
-    # Monta página responsiva com destaque no plano recomendado
-    telegram_id = request.args.get("telegram_id", "")
-    base_url = request.url_root.rstrip("/")
-
-    planos_html = ""
-    recommended = "3m"  # destaque para 3 meses por exemplo
-    for key, p in PLANOS.items():
-        destaque = "recommended" if key == recommended else ""
-        planos_html += f"""
-        <div class='plano {destaque}'>
-            <div class='badge'>{'RECOMENDADO' if destaque else ''}</div>
-            <h2>{p['descricao']}</h2>
-            <p class='valor'>R$ {p['valor']:.2f}</p>
-            <p class='periodo'>{p['dias']} dias</p>
-            <a href='{base_url}/criar_pagamento/{key}?telegram_id={telegram_id}' class='botao'>Assinar</a>
-        </div>
-        """
-
-    html = f"""
-    <!doctype html>
-    <html lang='pt-BR'>
-    <head>
-      <meta charset='utf-8'>
-      <meta name='viewport' content='width=device-width,initial-scale=1'>
-      <title>Planos Premium - Jet TikTokShop</title>
-      <style>
-        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; background: #0b1020; color: #e6eef8; margin:0; padding:20px }}
-        .container {{ max-width:980px; margin:0 auto; text-align:center }}
-        h1 {{ color:#7cf2b3; margin-bottom:6px }}
-        p.lead {{ color:#a9cbd6 }}
-        .planos {{ display:flex; gap:18px; justify-content:center; flex-wrap:wrap; margin-top:24px }}
-        .plano {{ background:linear-gradient(180deg,#0f1724,#111827); border-radius:14px; padding:20px; width:260px; box-shadow:0 8px 30px rgba(0,0,0,0.6); border:1px solid rgba(124,242,179,0.08); position:relative }}
-        .plano.recommended {{ transform:scale(1.03); border-color: rgba(124,242,179,0.28); box-shadow:0 12px 40px rgba(0,0,0,0.7) }}
-        .plano h2 {{ margin:6px 0 4px 0; color:#bff7d9 }}
-        .valor {{ font-size:22px; font-weight:700; margin:8px 0 }}
-        .periodo {{ color:#9fb7c7; margin-bottom:12px }}
-        .botao {{ display:inline-block; padding:10px 18px; background:#7cf2b3; color:#042016; border-radius:10px; text-decoration:none; font-weight:700 }}
-        .badge {{ position:absolute; top:10px; right:10px; background:#ffcf5c; color:#2a1b00; padding:6px 8px; border-radius:8px; font-weight:700; font-size:12px }}
-        footer {{ margin-top:28px; color:#93b6c0; font-size:14px }}
-      </style>
-    </head>
-    <body>
-      <div class='container'>
-        <h1>Planos Premium</h1>
-        <p class='lead'>Escolha o plano que mais combina com você. Pagamento via PIX (Asaas).</p>
-        <div class='planos'>
-          {planos_html}
-        </div>
-        <footer>Ao pagar, confirme que usou o mesmo Telegram ID mostrado no link.</footer>
-      </div>
-    </body>
-    </html>
-    """
-    return html
-
-
-@flask_app.route("/criar_pagamento/<plan_key>", methods=["GET"])
-def criar_pagamento(plan_key):
-    telegram_id = request.args.get("telegram_id", "")
-    if not telegram_id.isdigit():
-        return "Erro: ID do Telegram inválido.", 400
-
-    async def _create():
-        async with aiohttp.ClientSession() as session:
-            return await criar_cobranca_asaas(session, int(telegram_id), plan_key)
-
-    try:
-        # roda a coroutine em um novo loop (Flask roda em thread separada do loop principal do bot)
-        result = asyncio.run(_create())
-        link = result.get("link")
-        if link:
-            # redireciona automaticamente para o checkout (PIX / payment link)
-            return redirect(link)
-        else:
-            raw = result.get("raw")
-            return f"<h2>Erro ao gerar pagamento.</h2><pre>{json.dumps(raw, ensure_ascii=False, indent=2)}</pre>", 500
-    except Exception as e:
-        return f"<h2>Erro ao criar pagamento: {e}</h2>", 500
-
-
 # -----------------------
 # Notificações assíncronas
 # -----------------------
@@ -464,7 +351,6 @@ async def _notify_payment_confirmed(telegram_id: int, plan_key: str, venc_str: s
     except Exception as e:
         print("Erro notify_confirmed:", e)
 
-
 async def _notify_payment_canceled(telegram_id: int, plan_key: str, status: str):
     try:
         await app.bot.send_message(chat_id=telegram_id,
@@ -475,10 +361,10 @@ async def _notify_payment_canceled(telegram_id: int, plan_key: str, status: str)
         print("Erro notify_canceled:", e)
 
 # -----------------------
-# Background: verifica expirações e avisa 1 dia antes
+# Background: Expirações e lembretes
 # -----------------------
 async def expirations_watcher():
-    await asyncio.sleep(5)  # espera app subir
+    await asyncio.sleep(5)
     while True:
         try:
             premium = carregar_premium()
@@ -490,15 +376,14 @@ async def expirations_watcher():
                 except Exception:
                     continue
                 dias_restantes = (venc - hoje).days
-                if dias_restantes == 1:
-                    try:
-                        await app.bot.send_message(chat_id=uid,
-                                                   text="⏳ Seu plano Premium expira amanhã. Renove para não perder os benefícios.")
-                        await app.bot.send_message(chat_id=ADMIN_ID,
-                                                   text=f"⚠️ Aviso: plano do usuário {uid} expira amanhã ({venc_s}).")
-                    except Exception as e:
-                        print("Erro notify 1 dia:", e)
-                if dias_restantes < 0:
+                # Lembretes automáticos
+                if dias_restantes == 3:
+                    await _send_expiration_warning(uid, "Seu plano Premium expira em 3 dias.")
+                elif dias_restantes == 1:
+                    await _send_expiration_warning(uid, "⏳ Seu plano Premium expira amanhã.")
+                elif dias_restantes == 0:
+                    await _send_expiration_warning(uid, "⚠️ Seu plano Premium vence hoje!")
+                elif dias_restantes < 0:
                     remove_premium(uid)
                     try:
                         await app.bot.send_message(chat_id=uid,
@@ -509,7 +394,14 @@ async def expirations_watcher():
                         print("Erro notify expired:", e)
         except Exception as e:
             print("Erro no watcher:", e, traceback.format_exc())
-        await asyncio.sleep(24 * 60 * 60)
+        await asyncio.sleep(24 * 60 * 60)  # roda a cada 24h
+
+async def _send_expiration_warning(uid: int, msg: str):
+    try:
+        await app.bot.send_message(chat_id=uid, text=msg)
+        await app.bot.send_message(chat_id=ADMIN_ID, text=f"⏰ Aviso para {uid}: {msg}")
+    except Exception as e:
+        print("Erro send_expiration_warning:", e)
 
 # -----------------------
 # Inicialização assíncrona do bot
@@ -525,7 +417,6 @@ async def start_app():
     app.add_handler(CommandHandler("planos", planos_handler))
     app.add_handler(CommandHandler("duvida", duvida_handler))
     app.add_handler(CommandHandler("meuid", meuid_handler))
-    from telegram.ext import CallbackQueryHandler
     app.add_handler(CallbackQueryHandler(planos_callback, pattern=r"^plan:"))
     app.add_handler(CommandHandler("premiumlist", premiumlist_handler))
     app.add_handler(CommandHandler("forceadd", forceadd_handler))
@@ -533,38 +424,17 @@ async def start_app():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video_handler))
 
     async def post_init(a):
-        await a.bot.set_my_commands([
-            BotCommand("start", "Iniciar"),
-            BotCommand("planos", "Ver planos Premium"),
-            BotCommand("duvida", "Ajuda e contato"),
-            BotCommand("meuid", "Ver seu ID")
-        ])
-    app.post_init = post_init
+        asyncio.create_task(expirations_watcher())
 
     await app.initialize()
-    if WEBHOOK_URL:
-        try:
-            await app.bot.set_webhook(WEBHOOK_URL)
-            print("✅ Webhook configurado:", WEBHOOK_URL)
-        except Exception as e:
-            print("Falha ao setar webhook:", e)
     await app.start()
-    print("🤖 Bot initialized and started (webhook mode).")
-    asyncio.create_task(expirations_watcher())
-
-# -----------------------
-# Flask thread
-# -----------------------
-def run_flask():
-    port = int(os.environ.get("PORT", 5000))
-    @flask_app.route("/", methods=["GET"])
-    def index():
-        return "🤖 Bot ativo!", 200
-    flask_app.run(host="0.0.0.0", port=port)
+    await app.updater.start_polling()
+    await post_init(app)
+    print("Bot iniciado com sucesso!")
 
 if __name__ == "__main__":
-    flask_thread = asyncio.get_event_loop().run_in_executor(None, run_flask)
     try:
         asyncio.run(start_app())
-    except KeyboardInterrupt:
-        print("Exiting...")
+        flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    except (KeyboardInterrupt, SystemExit):
+        print("Bot encerrado.")
