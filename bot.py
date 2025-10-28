@@ -12,7 +12,6 @@ nest_asyncio.apply()
 from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
-from asyncio import run_coroutine_threadsafe
 
 # -----------------------
 # Configurações
@@ -198,10 +197,8 @@ def webhook_telegram():
         data = request.get_json(force=True)
         update = Update.de_json(data, bot_app.bot)
 
-        # Correção principal: enviar coroutine para o loop do bot
-        loop = bot_app._loop
-        run_coroutine_threadsafe(bot_app.process_update(update), loop)
-
+        # ⚡ Correção principal
+        asyncio.run_coroutine_threadsafe(bot_app.process_update(update), bot_app.loop)
     except Exception as e:
         print("❌ Erro no webhook:", e)
         print(traceback.format_exc())
