@@ -6,7 +6,7 @@ import os, json, asyncio, traceback
 from datetime import datetime, date
 from pathlib import Path
 import yt_dlp, aiohttp
-import nest_asyncio  # ✅ Import necessário para compatibilidade Flask + asyncio
+import nest_asyncio
 nest_asyncio.apply()
 
 from flask import Flask, request
@@ -193,7 +193,7 @@ async def iniciar_bot():
     return app
 
 # -----------------------
-# Flask + Webhook Telegram
+# Flask + Webhook Telegram (corrigido para Render)
 # -----------------------
 flask_app = Flask(__name__)
 
@@ -202,19 +202,17 @@ def home():
     return "🤖 Bot ativo no Render!"
 
 @flask_app.route("/webhook_telegram", methods=["POST"])
-def webhook_telegram():
+async def webhook_telegram():
+    """Recebe atualizações do Telegram e processa corretamente"""
     data = request.get_json(force=True)
-    asyncio.create_task(process_update(data))
-    return "OK", 200
-
-async def process_update(data):
     try:
-        from telegram import Update
         update = Update.de_json(data, bot_app.bot)
-        await bot_app.update_queue.put(update)
+        await bot_app.process_update(update)
     except Exception as e:
-        print("❌ Erro processando update:", e)
+        print("❌ Erro no webhook:", e)
         print(traceback.format_exc())
+        return "Erro interno", 500
+    return "OK", 200
 
 # -----------------------
 # Loop principal
@@ -225,12 +223,12 @@ async def main():
     await bot_app.initialize()
     await bot_app.start()
     print("🤖 Bot rodando via webhook!")
-    await asyncio.Event().wait()
+    await asyncio.Event().wait()  # mantém o bot ativo
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    # Flask em thread separada
+    # Executa Flask em thread separada
     Thread(target=lambda: flask_app.run(host="0.0.0.0", port=port, use_reloader=False)).start()
-    # Bot principal
+    # Executa o loop principal do bot
     loop = asyncio.get_event_loop()
     loop.run_until_complete(main())
