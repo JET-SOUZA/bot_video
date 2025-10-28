@@ -90,7 +90,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎬 *Bem-vindo(a) ao bot Jet_TikTokShop!*\n\n"
         "👉 Envie o link do vídeo que deseja baixar.\n"
         "⚠️ Usuário Free: até *10 vídeos/dia*\n"
-        "💎 Premium: downloads ilimitados (R$ 9,90/mês)."
+        "💎 Premium: downloads ilimitados (R$ 0,90/mês)."
     )
     await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=ReplyKeyboardRemove())
 
@@ -100,7 +100,7 @@ async def planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
         payload = {
             "customer": "CUS_ID_DO_CLIENTE",
             "billingType": "PIX",
-            "value": 9.90,
+            "value": 0.90,
             "dueDate": datetime.now().strftime("%Y-%m-%d"),
             "description": "Assinatura Premium Jet_TikTokShop",
             "metadata": {"telegram_id": user_id}
@@ -231,4 +231,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
