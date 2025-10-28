@@ -1,5 +1,5 @@
 # ==============================
-# Jet_TikTokShop Bot v5.6 (Render Webhook 24/7) — versão corrigida
+# Jet_TikTokShop Bot v6.0 (Render Webhook Stable)
 # ==============================
 
 import os, json, asyncio, traceback
@@ -12,7 +12,6 @@ nest_asyncio.apply()
 from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
-from threading import Thread
 
 # -----------------------
 # Configurações
@@ -179,67 +178,57 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(traceback.format_exc())
 
 # -----------------------
-# Inicialização do bot
-# -----------------------
-async def iniciar_bot():
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("planos", planos))
-    app.add_handler(CommandHandler("duvida", duvida))
-    app.add_handler(CommandHandler("meuid", meuid))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
-    await app.bot.set_webhook(WEBHOOK_URL)
-    print("✅ Webhook configurado com sucesso!")
-    return app
-
-# -----------------------
-# Flask + Webhook Telegram (corrigido)
+# Inicialização global
 # -----------------------
 flask_app = Flask(__name__)
+bot_app = None  # será definido após inicialização
 
-@flask_app.route('/')
+@flask_app.route("/")
 def home():
     return "🤖 Bot ativo no Render!"
 
 @flask_app.route("/webhook_telegram", methods=["POST"])
 def webhook_telegram():
-    """Versão síncrona compatível com Flask no Render"""
+    global bot_app
+    if bot_app is None:
+        return "Bot não inicializado ainda", 503
+
     try:
         data = request.get_json(force=True)
-        if not data:
-            print("⚠️ Nenhum dado recebido.")
-            return "No data", 400
-
-        asyncio.run(process_update(data))
-        return "OK", 200
+        update = Update.de_json(data, bot_app.bot)
+        asyncio.create_task(bot_app.process_update(update))
     except Exception as e:
         print("❌ Erro no webhook:", e)
         print(traceback.format_exc())
-        return "Internal Server Error", 500
+        return "Erro interno", 500
 
-async def process_update(data):
-    try:
-        update = Update.de_json(data, bot_app.bot)
-        await bot_app.process_update(update)
-    except Exception as e:
-        print("❌ Erro processando update:", e)
-        print(traceback.format_exc())
+    return "OK", 200
 
 # -----------------------
-# Loop principal
+# Main
 # -----------------------
-async def main():
+async def iniciar_bot():
     global bot_app
-    bot_app = await iniciar_bot()
+    bot_app = ApplicationBuilder().token(TOKEN).build()
+
+    bot_app.add_handler(CommandHandler("start", start))
+    bot_app.add_handler(CommandHandler("planos", planos))
+    bot_app.add_handler(CommandHandler("duvida", duvida))
+    bot_app.add_handler(CommandHandler("meuid", meuid))
+    bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
+
+    await bot_app.bot.set_webhook(WEBHOOK_URL)
+    print("✅ Webhook configurado:", WEBHOOK_URL)
+
     await bot_app.initialize()
     await bot_app.start()
-    print("🤖 Bot rodando via webhook!")
-    await asyncio.Event().wait()  # mantém o bot ativo
+    print("🤖 Bot iniciado e pronto!")
+
+async def main():
+    await iniciar_bot()
+    port = int(os.environ.get("PORT", 5000))
+    await asyncio.to_thread(lambda: flask_app.run(host="0.0.0.0", port=port, use_reloader=False))
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    # Executa Flask em thread separada
-    Thread(target=lambda: flask_app.run(host="0.0.0.0", port=port, use_reloader=False)).start()
-    # Executa o loop principal do bot
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    asyncio.run(main())
+
