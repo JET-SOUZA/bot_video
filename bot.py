@@ -1,15 +1,18 @@
 # ==============================
-# Jet_TikTokShop Bot v5.5 (Webhook 24/7 no Render)
+# Jet_TikTokShop Bot v5.6 (Webhook 24/7 no Render)
 # ==============================
 
 import os, json, asyncio, traceback
 from datetime import datetime, date
 from pathlib import Path
-import yt_dlp, aiohttp
+import yt_dlp, aiohttp, nest_asyncio
 from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 from threading import Thread
+
+# Corrige o erro de "no running event loop" (necessário para Render)
+nest_asyncio.apply()
 
 # -----------------------
 # Configurações
@@ -153,7 +156,7 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 info = ydl.extract_info(url, download=True)
                 return ydl.prepare_filename(info)
 
-        loop = asyncio.get_running_loop()
+        loop = asyncio.get_event_loop()
         arquivo = await loop.run_in_executor(None, lambda: baixar(texto))
         if not os.path.exists(arquivo):
             await update.message.reply_text("⚠️ Falha ao baixar o vídeo.")
@@ -190,7 +193,7 @@ async def iniciar_bot():
     return app
 
 # -----------------------
-# Flask + webhook Telegram
+# Flask + Webhook Telegram
 # -----------------------
 flask_app = Flask(__name__)
 
@@ -200,15 +203,19 @@ def home():
 
 @flask_app.route("/webhook_telegram", methods=["POST"])
 def webhook_telegram():
-    data = request.get_json(force=True)
-    asyncio.create_task(process_update(data))
-    return "OK", 200
+    try:
+        data = request.get_json(force=True)
+        asyncio.run(process_update(data))
+        return "OK", 200
+    except Exception as e:
+        print("❌ Erro no webhook:", e)
+        print(traceback.format_exc())
+        return "ERROR", 500
 
 async def process_update(data):
     try:
-        from telegram import Update
         update = Update.de_json(data, bot_app.bot)
-        await bot_app.update_queue.put(update)
+        await bot_app.process_update(update)
     except Exception as e:
         print("❌ Erro processando update:", e)
         print(traceback.format_exc())
@@ -222,12 +229,9 @@ async def main():
     await bot_app.initialize()
     await bot_app.start()
     print("🤖 Bot rodando via webhook!")
-    await asyncio.Event().wait()  # mantém o loop ativo
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    # Flask em thread separada
     Thread(target=lambda: flask_app.run(host="0.0.0.0", port=port, use_reloader=False)).start()
-    # Bot principal
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    asyncio.run(main())
