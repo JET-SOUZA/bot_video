@@ -13,11 +13,11 @@ import threading
 # -----------------------
 # Configurações
 # -----------------------
-TOKEN = os.environ.get("BOT_TOKEN")
+TOKEN = os.environ.get("8249697837:AAGfvejL5PT9w8sSPMZnIwErh0jX-XMpAPE")
 ADMIN_ID = 5593153639
 LIMITE_DIARIO = 10
 
-ASAAS_API_KEY = os.environ.get("ASAAS_API_KEY")
+ASAAS_API_KEY = os.environ.get("$aact_prod_000MzkwODA2MWY2OGM3MWRlMDU2NWM3MzJlNzZmNGZhZGY6OjQxNTY4M2IzLTU1M2UtNGEyNS05ODQ5LTUzM2Q1OTBiYzdiZTo6JGFhY2hfNGU1ZmE3OGEtMzliNS00OTZlLWFmMGMtNDMzN2VlMzM1Yjlh")
 ASAAS_BASE_URL = "https://www.asaas.com/api/v3"
 
 ARQUIVO_CONTADOR = "downloads.json"
@@ -307,3 +307,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
