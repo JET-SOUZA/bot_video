@@ -249,18 +249,37 @@ async def premiumlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lista = "\n".join(f"• {uid}" for uid in USUARIOS_PREMIUM)
     await update.message.reply_text(f"💎 Usuários Premium:\n{lista}")
 
+from flask import Flask, request
+import os
+
+# -----------------------
+# Dados dos usuários premium
+# -----------------------
+USUARIOS_PREMIUM = set()
+
+def salvar_premium(usuarios):
+    # Função para salvar premium (você deve ter sua lógica)
+    pass
+
 # -----------------------
 # Webhook Flask
 # -----------------------
 flask_app = Flask(__name__)
+
+# Rota para UptimeRobot
+@flask_app.route("/health", methods=["GET"])
+def health():
+    return "OK", 200
 
 @flask_app.route("/webhook_asaas", methods=["POST"])
 def webhook_asaas():
     data = request.json
     status = data.get("status")
     telegram_id = int(data.get("metadata", {}).get("telegram_id", 0))
+    
     if telegram_id == 0:
         return "No telegram ID", 400
+    
     if status == "CONFIRMED":
         USUARIOS_PREMIUM.add(telegram_id)
         salvar_premium(USUARIOS_PREMIUM)
@@ -268,6 +287,7 @@ def webhook_asaas():
         if telegram_id in USUARIOS_PREMIUM:
             USUARIOS_PREMIUM.remove(telegram_id)
             salvar_premium(USUARIOS_PREMIUM)
+    
     return "OK", 200
 
 @flask_app.route("/webhook_telegram", methods=["POST"])
@@ -278,9 +298,13 @@ def webhook_telegram():
     app.update_queue.put(update)
     return "OK", 200
 
+# -----------------------
+# Executar Flask
+# -----------------------
 def run_flask():
     port = int(os.environ.get("PORT", 5000))
     flask_app.run(host="0.0.0.0", port=port)
+
 
 # -----------------------
 # Inicialização
@@ -318,3 +342,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
