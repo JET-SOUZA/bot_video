@@ -1,16 +1,18 @@
-# Jet_TikTokShop Bot v4.6 - Premium via Asaas + QR Code PIX + Vencimento Automático + Health Check
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+# Jet_TikTokShop Bot v4.6 - Premium via Asaas + QR Code PIX + Vencimento Automático + Webhook
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Bot
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, Dispatcher
 from flask import Flask, request
 from datetime import datetime, timedelta
-import asyncio, os, json, aiohttp, threading
+import asyncio, os, json, aiohttp
 from io import BytesIO
+import threading
 
 # -----------------------
 # CONFIGURAÇÕES
 # -----------------------
 ASAAS_API_KEY = os.getenv("ASAAS_API_KEY", "SUA_CHAVE_API_ASAAS_AQUI")
 ASAAS_API_URL = "https://www.asaas.com/api/v3"
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 USUARIOS_PREMIUM = {}  # {telegram_id: {"vencimento": date, "plano": "1m"}}
 
@@ -31,6 +33,7 @@ carregar_premium()
 # -----------------------
 # TELEGRAM BOT
 # -----------------------
+app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
 async def planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     botoes = [
@@ -44,13 +47,10 @@ async def planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=markup,
     )
 
-# -----------------------
-# CALLBACK PLANOS COM QR CODE
-# -----------------------
 async def callback_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
+
     links_planos = {
         "plano_1m": {"descricao": "1 Mês", "valor": 9.90, "url": "https://www.asaas.com/c/knu5vub6ejc2yyja"},
         "plano_3m": {"descricao": "3 Meses", "valor": 25.90, "url": "https://www.asaas.com/c/o9pg4uxrpgwnmqzd"},
@@ -62,7 +62,6 @@ async def callback_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Plano inválido.")
         return
 
-    # Gerar QR Code via API gratuita
     qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=200x200&data={plano['url']}"
     
     async with aiohttp.ClientSession() as session:
@@ -77,10 +76,13 @@ async def callback_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"👉 Pague via PIX escaneando o QR Code ou clicando no link:\n{plano['url']}"
     )
 
+app.add_handler(CommandHandler("planos", planos))
+app.add_handler(CallbackQueryHandler(callback_planos, pattern="^plano_"))
+
 # -----------------------
 # VERIFICAÇÃO DE VENCIMENTOS
 # -----------------------
-async def verificar_vencimentos(app):
+async def verificar_vencimentos():
     while True:
         hoje = datetime.now().date()
         for user_id, info in list(USUARIOS_PREMIUM.items()):
@@ -96,7 +98,7 @@ async def verificar_vencimentos(app):
                     chat_id=user_id,
                     text="❌ Seu plano Premium venceu hoje. Renove para continuar aproveitando o bot!"
                 )
-        await asyncio.sleep(86400)  # Verifica uma vez por dia
+        await asyncio.sleep(86400)
 
 # -----------------------
 # FLASK (Webhook Asaas + Telegram + Health)
@@ -147,11 +149,9 @@ def run_flask():
 # -----------------------
 # EXECUÇÃO
 # -----------------------
-app = ApplicationBuilder().token(os.getenv("TELEGRAM_TOKEN")).build()
-app.add_handler(CommandHandler("planos", planos))
-app.add_handler(CallbackQueryHandler(callback_planos, pattern="^plano_"))
-app.job_queue.run_once(lambda _: verificar_vencimentos(app), when=10)
-
 if __name__ == "__main__":
+    # Inicia Flask
     threading.Thread(target=run_flask).start()
-    app.run_polling()
+    # Inicia verificação de vencimentos
+    asyncio.get_event_loop().create_task(verificar_vencimentos())
+    print("Bot pronto para receber mensagens via Webhook!")
