@@ -1,4 +1,6 @@
-# Jet_TikTokShop Bot v4.7 - Premium via Asaas + QR Code PIX + Vencimento Automático + Webhook Render
+# Jet_TikTokShop Bot v4.7 (CORRIGIDO)
+# Premium via Asaas + QR Code PIX + Vencimento Automático + Webhook Render
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 from flask import Flask, request
@@ -12,7 +14,7 @@ import threading
 # -----------------------
 ASAAS_API_KEY = os.getenv("ASAAS_API_KEY", "SUA_CHAVE_API_ASAAS_AQUI")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Ex: https://seu-bot.onrender.com/webhook_telegram
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Ex: https://bot-video-mgli.onrender.com
 ASAAS_API_URL = "https://www.asaas.com/api/v3"
 
 USUARIOS_PREMIUM = {}
@@ -111,7 +113,7 @@ def health():
 def webhook_telegram():
     from telegram import Update
     update = Update.de_json(request.get_json(force=True), app.bot)
-    asyncio.run(app.process_update(update))
+    asyncio.get_event_loop().create_task(app.process_update(update))
     return "OK", 200
 
 @flask_app.route("/webhook_asaas", methods=["POST"])
@@ -147,8 +149,11 @@ async def set_webhook():
     if not WEBHOOK_URL:
         print("❌ WEBHOOK_URL não configurada!")
         return
+    # Apaga o webhook antigo (evita conflito com getUpdates)
+    requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook")
+    # Registra o webhook correto
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook"
-    r = requests.post(url, data={"url": WEBHOOK_URL})
+    r = requests.post(url, data={"url": f"{WEBHOOK_URL}/webhook_telegram"})
     print("🔗 Webhook configurado:", r.json())
 
 # -----------------------
