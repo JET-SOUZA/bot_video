@@ -1,6 +1,5 @@
-# Jet_TikTokShop Bot v4.5 - Adaptado para Render
+# Jet_TikTokShop Bot v4.5 - Webhook-ready para Render
 # Downloads + Premium Dinâmico via Asaas + Ver ID + TikTok com cookies
-# Webhook Telegram + Asaas + Flask
 
 import os, json, aiohttp, asyncio, traceback
 from datetime import datetime, date
@@ -8,6 +7,7 @@ from pathlib import Path
 from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
+import yt_dlp
 
 # -----------------------
 # Configurações
@@ -55,8 +55,7 @@ def salvar_premium(usuarios):
     salvar_json(ARQUIVO_PREMIUM, {"premium_users": list(usuarios)})
 
 USUARIOS_PREMIUM = carregar_premium()
-# IDs Premium fixos
-USUARIOS_PREMIUM.update({ADMIN_ID})
+USUARIOS_PREMIUM.add(ADMIN_ID)
 salvar_premium(USUARIOS_PREMIUM)
 
 # -----------------------
@@ -81,6 +80,11 @@ def incrementar_download(user_id):
     return dados[str(user_id)]["downloads"]
 
 # -----------------------
+# Inicializa bot
+# -----------------------
+app = ApplicationBuilder().token(TOKEN).build()
+
+# -----------------------
 # Flask Webhook
 # -----------------------
 flask_app = Flask(__name__)
@@ -89,12 +93,18 @@ flask_app = Flask(__name__)
 def health_check():
     return "Bot ativo!", 200
 
+@flask_app.route("/webhook_telegram", methods=["POST"])
+def webhook_telegram():
+    """Recebe updates do Telegram via webhook."""
+    update = Update.de_json(request.get_json(), app.bot)
+    asyncio.create_task(app.update_queue.put(update))
+    return "OK", 200
+
 @flask_app.route("/webhook_asaas", methods=["POST"])
 def webhook_asaas():
     data = request.json
     status = data.get("status")
     telegram_id = int(data.get("metadata", {}).get("telegram_id", 0))
-
     if telegram_id == 0:
         return "No telegram ID", 400
 
@@ -105,16 +115,6 @@ def webhook_asaas():
         USUARIOS_PREMIUM.discard(telegram_id)
         salvar_premium(USUARIOS_PREMIUM)
 
-    return "OK", 200
-
-# Telegram Application será inicializado globalmente
-app = ApplicationBuilder().token(TOKEN).build()
-
-@flask_app.route(f"/webhook_telegram", methods=["POST"])
-def webhook_telegram():
-    """Recebe updates do Telegram via webhook."""
-    update = Update.de_json(request.get_json(), app.bot)
-    asyncio.create_task(app.update_queue.put(update))
     return "OK", 200
 
 # -----------------------
@@ -160,7 +160,7 @@ async def meuid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🆔 Seu Telegram ID é: `{update.message.from_user.id}`", parse_mode="Markdown")
 
 # -----------------------
-# Comandos Admin
+# Admin
 # -----------------------
 async def premiumadd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID or not context.args:
@@ -185,10 +185,8 @@ async def premiumlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"💎 Usuários Premium:\n{lista}")
 
 # -----------------------
-# Handler para baixar vídeos
+# Download vídeo
 # -----------------------
-import yt_dlp
-
 async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text.strip()
     user_id = update.message.from_user.id
@@ -263,4 +261,5 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
 # -----------------------
 if __name__ == "__main__":
     print("🤖 Bot pronto! Aguardando mensagens via Webhook...")
+    # Flask será executado pelo gunicorn
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
