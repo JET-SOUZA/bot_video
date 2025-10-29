@@ -1,5 +1,3 @@
-esse é o meu bot.py que esta rodando, resolva com o que precisar, sem mexer na estrutura que ja esta funcionando
-
 # Jet_TikTokShop Bot v4.5 - Adaptado para Render
 # Downloads + Premium Dinâmico via Asaas + Ver ID + TikTok com cookies
 
@@ -309,6 +307,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
