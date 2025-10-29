@@ -51,17 +51,20 @@ def salvar_json(caminho, dados):
 # -----------------------
 def carregar_premium():
     dados = carregar_json(ARQUIVO_PREMIUM)
-    return dados.get("premium_users", {})
+    
+    if not isinstance(dados, dict):
+        dados = {}
+    return dados
 
-def salvar_premium(usuarios):
-    salvar_json(ARQUIVO_PREMIUM, {"premium_users": usuarios})
+def salvar_premium(dados):
+    salvar_json(ARQUIVO_PREMIUM, dados)
 
 USUARIOS_PREMIUM = carregar_premium()
 
-# IDs fixos (permanentes)
-USUARIOS_PREMIUM[str(5593153639)] = {"validade": "2099-12-31"}
-
+# IDs Premium fixos com validade longa (admin e testes)
+USUARIOS_PREMIUM[str(5593153639)] = {"validade": "2099-12-31"}  # Admin
 salvar_premium(USUARIOS_PREMIUM)
+
 
 def is_premium(user_id):
     info = USUARIOS_PREMIUM.get(str(user_id))
@@ -289,3 +292,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
