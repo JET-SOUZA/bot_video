@@ -1,36 +1,44 @@
-# -----------------------
-# TELEGRAM BOT
-# -----------------------
+# Jet_TikTokShop Bot v4.7 - Premium via Asaas + QR Code PIX + Vencimento Automático + Webhook Render
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 from flask import Flask, request
 from datetime import datetime, timedelta
-import asyncio, os, json, aiohttp
+import asyncio, os, json, aiohttp, requests
 from io import BytesIO
 import threading
 
-# Configurações
+# -----------------------
+# CONFIGURAÇÕES
+# -----------------------
 ASAAS_API_KEY = os.getenv("ASAAS_API_KEY", "SUA_CHAVE_API_ASAAS_AQUI")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Ex: https://seu-bot.onrender.com/webhook_telegram
+ASAAS_API_URL = "https://www.asaas.com/api/v3"
 
 USUARIOS_PREMIUM = {}
-if os.path.exists("usuarios_premium.json"):
-    with open("usuarios_premium.json") as f:
-        USUARIOS_PREMIUM = json.load(f)
 
+# -----------------------
+# CARREGAR / SALVAR USUÁRIOS PREMIUM
+# -----------------------
 def salvar_premium():
     with open("usuarios_premium.json", "w") as f:
         json.dump(USUARIOS_PREMIUM, f)
 
-# Cria Flask app
-flask_app = Flask(__name__)
+def carregar_premium():
+    global USUARIOS_PREMIUM
+    if os.path.exists("usuarios_premium.json"):
+        with open("usuarios_premium.json", "r") as f:
+            USUARIOS_PREMIUM = json.load(f)
+    else:
+        USUARIOS_PREMIUM = {}
 
-# Cria bot
+carregar_premium()
+
+# -----------------------
+# BOT TELEGRAM
+# -----------------------
 app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-# -----------------------
-# COMANDOS / PLANOS
-# -----------------------
 async def planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     botoes = [
         [InlineKeyboardButton("💎 1 Mês - R$ 9,90", callback_data="plano_1m")],
@@ -59,11 +67,11 @@ async def callback_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=200x200&data={plano['url']}"
-    
+
     async with aiohttp.ClientSession() as session:
         async with session.get(qr_url) as resp:
             img_data = await resp.read()
-    
+
     bio = BytesIO(img_data)
     bio.name = "qrcode.png"
     await query.message.reply_photo(
@@ -87,12 +95,14 @@ async def verificar_vencimentos():
             if dias_restantes == 1:
                 await app.bot.send_message(chat_id=user_id, text="⚠️ Seu plano Premium vence amanhã! Renove.")
             elif dias_restantes <= 0:
-                await app.bot.send_message(chat_id=user_id, text="❌ Seu plano Premium venceu. Renove.")
-        await asyncio.sleep(86400)  # 24h
+                await app.bot.send_message(chat_id=user_id, text="❌ Seu plano Premium venceu. Renove para continuar usando.")
+        await asyncio.sleep(86400)
 
 # -----------------------
 # FLASK WEBHOOKS
 # -----------------------
+flask_app = Flask(__name__)
+
 @flask_app.route("/health")
 def health():
     return "OK", 200
@@ -101,7 +111,7 @@ def health():
 def webhook_telegram():
     from telegram import Update
     update = Update.de_json(request.get_json(force=True), app.bot)
-    asyncio.get_event_loop().create_task(app.update_queue.put(update))
+    asyncio.run(app.process_update(update))
     return "OK", 200
 
 @flask_app.route("/webhook_asaas", methods=["POST"])
@@ -118,26 +128,37 @@ def webhook_asaas():
         descricao = data.get("description", "1 Mês")
         dias = planos.get(descricao, 30)
         vencimento = (datetime.now() + timedelta(days=dias)).strftime("%Y-%m-%d")
-        USUARIOS_PREMIUM[telegram_id] = {"vencimento": vencimento, "plano": descricao}
+        USUARIOS_PREMIUM[str(telegram_id)] = {"vencimento": vencimento, "plano": descricao}
         salvar_premium()
     elif status in ["CANCELED", "EXPIRED"]:
-        if telegram_id in USUARIOS_PREMIUM:
-            del USUARIOS_PREMIUM[telegram_id]
+        if str(telegram_id) in USUARIOS_PREMIUM:
+            del USUARIOS_PREMIUM[str(telegram_id)]
             salvar_premium()
     return "OK", 200
 
 def run_flask():
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 10000))
     flask_app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+
+# -----------------------
+# REGISTRAR WEBHOOK AUTOMATICAMENTE
+# -----------------------
+async def set_webhook():
+    if not WEBHOOK_URL:
+        print("❌ WEBHOOK_URL não configurada!")
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook"
+    r = requests.post(url, data={"url": WEBHOOK_URL})
+    print("🔗 Webhook configurado:", r.json())
 
 # -----------------------
 # EXECUÇÃO
 # -----------------------
 if __name__ == "__main__":
-    # Start Flask in a thread
+    print("🚀 Iniciando bot Jet_TikTokShop...")
     threading.Thread(target=run_flask, daemon=True).start()
-    # Start verificar_vencimentos task
-    asyncio.get_event_loop().create_task(verificar_vencimentos())
-    # Start bot (Webhook mode não precisa polling)
-    print("Bot pronto para receber mensagens via Webhook!")
-    app.run_polling()
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(set_webhook())
+    loop.create_task(verificar_vencimentos())
+    print("✅ Bot pronto e aguardando mensagens do Telegram via Webhook!")
+    loop.run_forever()
