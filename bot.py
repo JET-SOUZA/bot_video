@@ -241,35 +241,58 @@ async def premiumlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # -----------------------
 # Webhook Flask
 # -----------------------
+from flask import Flask, request
+
 flask_app = Flask(__name__)
 
+USUARIOS_PREMIUM = set()
+
+# Função para salvar usuários premium
+def salvar_premium(usuarios):
+    with open("usuarios_premium.txt", "w") as f:
+        for user_id in usuarios:
+            f.write(f"{user_id}\n")
+
+# ✅ Rota de verificação para o UptimeRobot
+@flask_app.route("/health", methods=["GET"])
+def health_check():
+    return "Bot ativo!", 200
+
+
+# ✅ Webhook do Asaas (pagamentos)
 @flask_app.route("/webhook_asaas", methods=["POST"])
 def webhook_asaas():
     data = request.json
     status = data.get("status")
     telegram_id = int(data.get("metadata", {}).get("telegram_id", 0))
+
     if telegram_id == 0:
         return "No telegram ID", 400
+
     if status == "CONFIRMED":
         USUARIOS_PREMIUM.add(telegram_id)
         salvar_premium(USUARIOS_PREMIUM)
+
     elif status in ["CANCELED", "EXPIRED"]:
         if telegram_id in USUARIOS_PREMIUM:
             USUARIOS_PREMIUM.remove(telegram_id)
             salvar_premium(USUARIOS_PREMIUM)
+
     return "OK", 200
 
+
+# ✅ Webhook do Telegram (mantém o padrão POST)
 @flask_app.route("/webhook_telegram", methods=["POST"])
 def webhook_telegram():
-    from telegram import Update
-    from telegram.ext import Application
-    update = Update.de_json(request.get_json(force=True), app.bot)
-    app.update_queue.put(update)
-    return "OK", 200
+    # Aqui vai o tratamento das mensagens do Telegram
+    update = request.json
+    # (processamento do bot)
+    return "Webhook recebido", 200
 
-def run_flask():
-    port = int(os.environ.get("PORT", 5000))
-    flask_app.run(host="0.0.0.0", port=port)
+
+if __name__ == "__main__":
+    flask_app.run(host="0.0.0.0", port=10000)
+
 
 # -----------------------
 # Inicialização
@@ -307,6 +330,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
