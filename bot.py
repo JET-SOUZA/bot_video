@@ -1,10 +1,9 @@
 # Jet_TikTokShop Bot v4.6 - Premium via Asaas + Vencimento Automático + Health Check
-
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 from flask import Flask, request
 from datetime import datetime, timedelta
-import asyncio, aiohttp, os, json
+import asyncio, os, json, threading
 
 # -----------------------
 # CONFIGURAÇÕES
@@ -44,56 +43,33 @@ async def planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=markup,
     )
 
-async def gerar_link_asaas(telegram_id: int, valor: float, descricao: str, validade_dias: int):
-    """Cria link de pagamento PIX via API Asaas"""
-    url = f"{ASAAS_API_URL}/paymentLinks"
-    headers = {
-        "accept": "application/json",
-        "content-type": "application/json",
-        "access_token": ASAAS_API_KEY,
-    }
-    payload = {
-        "name": descricao,
-        "description": f"Plano Premium {descricao}",
-        "chargeType": "DETACHED",
-        "value": valor,
-        "dueDateLimitDays": validade_dias,
-        "billingType": "PIX",
-        "metadata": {"telegram_id": telegram_id},
-        "redirectUrl": "https://t.me/jet_tikshop_bot",
-    }
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, headers=headers, json=payload) as resp:
-            data = await resp.json()
-            return data.get("url", "Erro ao gerar link.")
-
+# -----------------------
+# CALLBACK PLANOS COM LINKS FIXOS
+# -----------------------
 async def callback_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    telegram_id = query.from_user.id
-
-    planos = {
-        "plano_1m": {"valor": 9.90, "descricao": "1 Mês", "dias": 30},
-        "plano_3m": {"valor": 25.90, "descricao": "3 Meses", "dias": 90},
-        "plano_1a": {"valor": 89.90, "descricao": "1 Ano", "dias": 365},
+    
+    links_planos = {
+        "plano_1m": {"descricao": "1 Mês", "valor": 9.90, "url": "https://www.asaas.com/c/knu5vub6ejc2yyja"},
+        "plano_3m": {"descricao": "3 Meses", "valor": 25.90, "url": "https://www.asaas.com/c/o9pg4uxrpgwnmqzd"},
+        "plano_1a": {"descricao": "1 Ano", "valor": 89.90, "url": "https://www.asaas.com/c/puto9coszhwgprqc"},
     }
 
-    plano = planos.get(query.data)
+    plano = links_planos.get(query.data)
     if not plano:
         await query.edit_message_text("Plano inválido.")
         return
 
-    link = await gerar_link_asaas(telegram_id, plano["valor"], plano["descricao"], 2)
     await query.edit_message_text(
         f"💎 *Plano:* {plano['descricao']}\n💰 *Valor:* R$ {plano['valor']}\n\n"
-        f"👉 Clique abaixo para pagar via PIX:\n{link}",
+        f"👉 Clique abaixo para pagar via PIX ou cartão:\n{plano['url']}",
         parse_mode="Markdown",
     )
 
 # -----------------------
 # VERIFICAÇÃO DE VENCIMENTOS
 # -----------------------
-
 async def verificar_vencimentos(app):
     while True:
         hoje = datetime.now().date()
@@ -167,6 +143,5 @@ app.add_handler(CallbackQueryHandler(callback_planos, pattern="^plano_"))
 app.job_queue.run_once(lambda _: verificar_vencimentos(app), when=10)
 
 if __name__ == "__main__":
-    import threading
     threading.Thread(target=run_flask).start()
     app.run_polling()
