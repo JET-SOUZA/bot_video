@@ -27,10 +27,8 @@ SCRIPT_DIR = Path(__file__).parent.resolve()
 DOWNLOADS_DIR = SCRIPT_DIR / "downloads"
 DOWNLOADS_DIR.mkdir(exist_ok=True)
 
-# Caminho do arquivo de cookies do TikTok
 COOKIES_TIKTOK = SCRIPT_DIR / "cookies.txt"
 
-# Criar arquivo de cookies a partir da variável de ambiente, se não existir
 if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
     with open(COOKIES_TIKTOK, "w") as f:
         f.write(os.environ["COOKIES_TIKTOK"])
@@ -98,30 +96,43 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎬 *Bem-vindo(a) ao bot Jet_TikTokShop!*\n\n"
         "👉 Envie o link do vídeo que deseja baixar.\n"
         "⚠️ Usuário Free: até *10 vídeos/dia*\n"
-        "💎 Premium: downloads ilimitados (R$ 9,90/mês).\n\n"
+        "💎 Premium: downloads ilimitados.\n\n"
         "✨ Use o botão de menu (📎 ➜ /) para ver os comandos disponíveis."
     )
     await update.message.reply_text(mensagem, parse_mode="Markdown", reply_markup=ReplyKeyboardRemove())
 
+# -----------------------
+# Planos Premium - 3 opções
+# -----------------------
 async def planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    async with aiohttp.ClientSession() as session:
-        payload = {
-            "customer": "CUS_ID_DO_CLIENTE",
-            "billingType": "PIX",
-            "value": 9.90,
-            "dueDate": datetime.now().strftime("%Y-%m-%d"),
-            "description": "Assinatura Premium Jet_TikTokShop",
-            "metadata": {"telegram_id": user_id}
-        }
-        headers = {"access_token": ASAAS_API_KEY, "Content-Type": "application/json"}
-        async with session.post(f"{ASAAS_BASE_URL}/payments", json=payload, headers=headers) as resp:
-            data = await resp.json()
-            link_pagamento = data.get("pixQrCode") or data.get("paymentLink") or "https://www.asaas.com"
 
-    keyboard = [[InlineKeyboardButton("💰 Pagar Premium", url=link_pagamento)]]
+    # Definir os planos
+    planos_disponiveis = [
+        {"descricao": "1 Mês", "valor": 9.90},
+        {"descricao": "3 Meses", "valor": 25.90},
+        {"descricao": "1 Ano", "valor": 89.90}
+    ]
+
+    keyboard = []
+    async with aiohttp.ClientSession() as session:
+        for plano in planos_disponiveis:
+            payload = {
+                "customer": "CUS_ID_DO_CLIENTE",  # Substituir pelo seu ID no Asaas
+                "billingType": "PIX",
+                "value": plano["valor"],
+                "dueDate": datetime.now().strftime("%Y-%m-%d"),
+                "description": f"Assinatura Premium {plano['descricao']} Jet_TikTokShop",
+                "metadata": {"telegram_id": user_id}
+            }
+            headers = {"access_token": ASAAS_API_KEY, "Content-Type": "application/json"}
+            async with session.post(f"{ASAAS_BASE_URL}/payments", json=payload, headers=headers) as resp:
+                data = await resp.json()
+                link_pagamento = data.get("pixQrCode") or data.get("paymentLink") or "https://www.asaas.com"
+            keyboard.append([InlineKeyboardButton(f"💎 {plano['descricao']} - R$ {plano['valor']}", url=link_pagamento)])
+
     markup = InlineKeyboardMarkup(keyboard)
-    texto = "💎 Clique no botão abaixo para pagar a assinatura Premium e liberar downloads ilimitados."
+    texto = "💎 Escolha seu plano Premium para liberar downloads ilimitados:"
     await update.message.reply_text(texto, reply_markup=markup)
 
 async def duvida(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -307,7 +318,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
