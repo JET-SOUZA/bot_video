@@ -1,9 +1,10 @@
-# Jet_TikTokShop Bot v4.6 - Premium via Asaas + Vencimento Automático + Health Check
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+# Jet_TikTokShop Bot v4.6 - Premium via Asaas + QR Code PIX + Vencimento Automático + Health Check
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 from flask import Flask, request
 from datetime import datetime, timedelta
-import asyncio, os, json, threading
+import asyncio, os, json, aiohttp, threading
+from io import BytesIO
 
 # -----------------------
 # CONFIGURAÇÕES
@@ -44,7 +45,7 @@ async def planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # -----------------------
-# CALLBACK PLANOS COM LINKS FIXOS
+# CALLBACK PLANOS COM QR CODE
 # -----------------------
 async def callback_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -61,10 +62,19 @@ async def callback_planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Plano inválido.")
         return
 
-    await query.edit_message_text(
-        f"💎 *Plano:* {plano['descricao']}\n💰 *Valor:* R$ {plano['valor']}\n\n"
-        f"👉 Clique abaixo para pagar via PIX ou cartão:\n{plano['url']}",
-        parse_mode="Markdown",
+    # Gerar QR Code via API gratuita
+    qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=200x200&data={plano['url']}"
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.get(qr_url) as resp:
+            img_data = await resp.read()
+    
+    bio = BytesIO(img_data)
+    bio.name = "qrcode.png"
+    await query.message.reply_photo(
+        photo=InputFile(bio),
+        caption=f"💎 Plano: {plano['descricao']}\n💰 Valor: R$ {plano['valor']}\n\n"
+                f"👉 Pague via PIX escaneando o QR Code ou clicando no link:\n{plano['url']}"
     )
 
 # -----------------------
