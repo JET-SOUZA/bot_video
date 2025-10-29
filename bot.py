@@ -1,6 +1,6 @@
 # Jet_TikTokShop Bot v4.6 - Premium via Asaas + QR Code PIX + Vencimento Automático + Webhook
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Bot
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, Dispatcher
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 from flask import Flask, request
 from datetime import datetime, timedelta
 import asyncio, os, json, aiohttp
