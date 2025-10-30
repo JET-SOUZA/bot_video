@@ -1,5 +1,5 @@
 # Jet_TikTokShop Bot v4.5 - Adaptado para Render
-# Downloads + Premium Dinâmico via Asaas + Ver ID + TikTok com cookies + Validade automática
+# Downloads + Premium Dinâmico via Asaas + Ver ID + TikTok com cookies + Validade automática + Admin tools
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, BotCommand
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
@@ -34,7 +34,7 @@ if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
         f.write(os.environ["COOKIES_TIKTOK"])
 
 # -----------------------
-# Funções JSON
+# Funções JSON gerais
 # -----------------------
 def carregar_json(caminho):
     if os.path.exists(caminho):
@@ -47,11 +47,10 @@ def salvar_json(caminho, dados):
         json.dump(dados, f)
 
 # -----------------------
-# Premium
+# Premium (estrutura: dict { "<telegram_id>": {"validade": "YYYY-MM-DD"} })
 # -----------------------
 def carregar_premium():
     dados = carregar_json(ARQUIVO_PREMIUM)
-    
     if not isinstance(dados, dict):
         dados = {}
     return dados
@@ -61,59 +60,82 @@ def salvar_premium(dados):
 
 USUARIOS_PREMIUM = carregar_premium()
 
-# IDs Premium fixos com validade longa (admin e testes)
-USUARIOS_PREMIUM[str(5593153639)] = {"validade": "2099-12-31"}  # Admin
+# Garante admin permanente (validade longa)
+USUARIOS_PREMIUM.setdefault(str(ADMIN_ID), {"validade": "2099-12-31"})
 salvar_premium(USUARIOS_PREMIUM)
-
 
 def is_premium(user_id):
     info = USUARIOS_PREMIUM.get(str(user_id))
     if not info:
         return False
-    validade = datetime.strptime(info["validade"], "%Y-%m-%d").date()
+    try:
+        validade = datetime.strptime(info["validade"], "%Y-%m-%d").date()
+    except Exception:
+        return False
     return validade >= date.today()
 
 # -----------------------
-# Registrar validade
+# Registrar validade (quando confirmado via Asaas ou addmanual)
 # -----------------------
 def registrar_validade(user_id, descricao):
-    duracao = {"1 Mês": 30, "3 Meses": 90, "1 Ano": 365}
-    dias = duracao.get(descricao, 30)
+    # tenta mapear a descrição para dias; se não conseguir, usa 30 dias por padrão
+    descricao_norm = (descricao or "").strip().lower()
+    if "1 mês" in descricao_norm or "1 mes" in descricao_norm:
+        dias = 30
+    elif "3 meses" in descricao_norm or "3 mes" in descricao_norm:
+        dias = 90
+    elif "1 ano" in descricao_norm or "1 ano" in descricao_norm:
+        dias = 365
+    else:
+        # se descricao não contiver texto previsível, manter 30 dias
+        dias = 30
+
     validade = date.today() + timedelta(days=dias)
-    USUARIOS_PREMIUM[str(user_id)] = {"validade": str(validade)}
+    USUARIOS_PREMIUM[str(user_id)] = {"validade": validade.strftime("%Y-%m-%d")}
     salvar_premium(USUARIOS_PREMIUM)
+    print(f"[premium] {user_id} -> validade {validade.isoformat()}")
 
 # -----------------------
-# Notificações automáticas
+# Notificações automáticas (rodando em background)
 # -----------------------
 async def verificar_vencimentos(app):
+    # loop infinito, roda uma vez por dia
     while True:
         hoje = date.today()
         for user_id, info in list(USUARIOS_PREMIUM.items()):
-            validade = datetime.strptime(info["validade"], "%Y-%m-%d").date()
+            try:
+                validade = datetime.strptime(info["validade"], "%Y-%m-%d").date()
+            except Exception:
+                continue
             dias_restantes = (validade - hoje).days
 
             try:
                 if dias_restantes == 1:
-                    await app.bot.send_message(chat_id=int(user_id),
+                    await app.bot.send_message(
+                        chat_id=int(user_id),
                         text="⚠️ *Seu plano Premium vence amanhã!* Renove para continuar com downloads ilimitados.",
-                        parse_mode="Markdown")
-
+                        parse_mode="Markdown"
+                    )
                 elif dias_restantes == 0:
-                    await app.bot.send_message(chat_id=int(user_id),
+                    await app.bot.send_message(
+                        chat_id=int(user_id),
                         text="💔 *Seu plano Premium vence hoje!* Renove para não perder o acesso.",
-                        parse_mode="Markdown")
-
+                        parse_mode="Markdown"
+                    )
                 elif dias_restantes < 0:
-                    await app.bot.send_message(chat_id=int(user_id),
-                        text="❌ Seu plano Premium expirou. Torne-se Premium novamente acessando /planos.")
-                    del USUARIOS_PREMIUM[user_id]
+                    # aviso de expiração e remoção
+                    await app.bot.send_message(
+                        chat_id=int(user_id),
+                        text="❌ Seu plano Premium expirou. Torne-se Premium novamente acessando /planos."
+                    )
+                    # remove do dicionário
+                    USUARIOS_PREMIUM.pop(user_id, None)
                     salvar_premium(USUARIOS_PREMIUM)
-
             except Exception as e:
-                print(f"Erro ao notificar {user_id}: {e}")
+                print(f"[verificar_vencimentos] erro notificando {user_id}: {e}")
 
-        await asyncio.sleep(86400)  # 1x por dia
+        # espera 24h
+        await asyncio.sleep(86400)
 
 # -----------------------
 # Limite diário
@@ -137,7 +159,7 @@ def incrementar_download(user_id):
     return dados[str(user_id)]["downloads"]
 
 # -----------------------
-# Comandos
+# Comandos do bot
 # -----------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mensagem = (
@@ -168,7 +190,7 @@ async def meuid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🆔 Seu Telegram ID é: `{update.message.from_user.id}`", parse_mode="Markdown")
 
 # -----------------------
-# Download
+# Download de vídeo
 # -----------------------
 async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text.strip()
@@ -216,13 +238,50 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Erro: {e}")
 
 # -----------------------
-# Admin
+# Admin: lista e comandos manuais
 # -----------------------
 async def premiumlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
         return
-    texto = "\n".join([f"• {uid} (até {info['validade']})" for uid, info in USUARIOS_PREMIUM.items()])
+    texto = "\n".join([f"• {uid} (até {info.get('validade')})" for uid, info in USUARIOS_PREMIUM.items()])
     await update.message.reply_text("💎 Usuários Premium:\n" + texto)
+
+# comandos administrativos: addpremium e delpremium
+async def addpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID:
+        await update.message.reply_text("🚫 Você não tem permissão para usar este comando.")
+        return
+
+    try:
+        telegram_id = str(context.args[0])
+        dias = int(context.args[1])
+    except (IndexError, ValueError):
+        await update.message.reply_text("Uso correto: /addpremium <id> <dias>")
+        return
+
+    validade = (date.today() + timedelta(days=dias)).strftime("%Y-%m-%d")
+    USUARIOS_PREMIUM[telegram_id] = {"validade": validade}
+    salvar_premium(USUARIOS_PREMIUM)
+
+    await update.message.reply_text(f"✅ Usuário `{telegram_id}` recebeu acesso premium até {validade}.", parse_mode="Markdown")
+
+async def delpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID:
+        await update.message.reply_text("🚫 Você não tem permissão para usar este comando.")
+        return
+
+    try:
+        telegram_id = str(context.args[0])
+    except IndexError:
+        await update.message.reply_text("Uso correto: /delpremium <id>")
+        return
+
+    if telegram_id in USUARIOS_PREMIUM:
+        USUARIOS_PREMIUM.pop(telegram_id, None)
+        salvar_premium(USUARIOS_PREMIUM)
+        await update.message.reply_text(f"❌ Usuário `{telegram_id}` removido do premium.", parse_mode="Markdown")
+    else:
+        await update.message.reply_text(f"⚠️ Usuário `{telegram_id}` não encontrado no premium.", parse_mode="Markdown")
 
 # -----------------------
 # Flask Webhook
@@ -244,11 +303,53 @@ def webhook_asaas():
         return "No telegram ID", 400
 
     if status == "CONFIRMED":
+        # registra validade e salva
         registrar_validade(telegram_id, descricao)
         salvar_premium(USUARIOS_PREMIUM)
+
+        # notifica o usuário
+        try:
+            validade = USUARIOS_PREMIUM.get(str(telegram_id), {}).get("validade")
+            texto = (
+                "💎 *Seu plano Premium foi ativado com sucesso!*\n\n"
+                f"✅ Validade até: *{datetime.strptime(validade, '%Y-%m-%d').strftime('%d/%m/%Y')}*\n\n"
+                "Aproveite seus downloads ilimitados! 🚀"
+            )
+            # roda uma nova loop temporário para enviar (é seguro aqui)
+            asyncio.run(app.bot.send_message(chat_id=telegram_id, text=texto, parse_mode="Markdown"))
+        except Exception as e:
+            print(f"[webhook_asaas] erro ao notificar usuario {telegram_id}: {e}")
+
+        # notifica o admin (você)
+        try:
+            texto_admin = (
+                f"📢 Novo Premium confirmado:\nID: {telegram_id}\nPlano: {descricao or 'não informado'}\n"
+                f"Validade: {USUARIOS_PREMIUM.get(str(telegram_id), {}).get('validade')}"
+            )
+            asyncio.run(app.bot.send_message(chat_id=ADMIN_ID, text=texto_admin))
+        except Exception as e:
+            print(f"[webhook_asaas] erro ao notificar admin: {e}")
+
     elif status in ["CANCELED", "EXPIRED"]:
         USUARIOS_PREMIUM.pop(str(telegram_id), None)
         salvar_premium(USUARIOS_PREMIUM)
+
+        # notifica usuario sobre cancelamento/expiração
+        try:
+            texto = (
+                "❌ *Seu plano Premium foi cancelado ou expirou.*\n\n"
+                "Você pode renovar a qualquer momento em /planos."
+            )
+            asyncio.run(app.bot.send_message(chat_id=telegram_id, text=texto, parse_mode="Markdown"))
+        except Exception as e:
+            print(f"[webhook_asaas] erro ao notificar cancelamento {telegram_id}: {e}")
+
+        # notifica admin sobre cancelamento
+        try:
+            texto_admin = f"⚠️ Premium cancelado/expirado: ID {telegram_id} (status {status})"
+            asyncio.run(app.bot.send_message(chat_id=ADMIN_ID, text=texto_admin))
+        except Exception as e:
+            print(f"[webhook_asaas] erro ao notificar admin cancelamento: {e}")
 
     return "OK", 200
 
@@ -269,22 +370,32 @@ def main():
     threading.Thread(target=run_flask, daemon=True).start()
 
     async def comandos_post_init(app):
+        # registra comandos e inicia verificação diária em background (task no loop do bot)
         await app.bot.set_my_commands([
             BotCommand("start", "Iniciar o bot"),
             BotCommand("planos", "Ver planos Premium"),
             BotCommand("duvida", "Ajuda e contato"),
-            BotCommand("meuid", "Ver seu ID do Telegram")
+            BotCommand("meuid", "Ver seu ID do Telegram"),
+            BotCommand("premiumlist", "Listar usuários premium (admin)"),
+            BotCommand("addpremium", "Adicionar premium manualmente (admin)"),
+            BotCommand("delpremium", "Remover premium manualmente (admin)")
         ])
+        # roda verificação de vencimentos em background
         asyncio.create_task(verificar_vencimentos(app))
 
     global app
     app = ApplicationBuilder().token(TOKEN).post_init(comandos_post_init).build()
 
+    # handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("planos", planos))
     app.add_handler(CommandHandler("duvida", duvida))
     app.add_handler(CommandHandler("meuid", meuid))
     app.add_handler(CommandHandler("premiumlist", premiumlist))
+    app.add_handler(CommandHandler("addpremium", addpremium))
+    app.add_handler(CommandHandler("delpremium", delpremium))
+
+    # Mensagens de links (download)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
 
     print("🤖 Bot ativo e monitorando planos premium...")
@@ -292,4 +403,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
