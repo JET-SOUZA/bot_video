@@ -1,5 +1,5 @@
-# Jet_TikTokShop Bot v4.5 - Adaptado para Render
-# Downloads + Premium Dinâmico via Asaas + Ver ID + TikTok/Instagram com cookies + Validade automática + Admin tools
+# Jet_TikTokShop Bot v4.6 - Adaptado para Render + Cookies YouTube
+# Downloads + Premium Dinâmico via Asaas + Ver ID + TikTok/Instagram/YouTube com cookies + Validade automática + Admin tools
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, BotCommand
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
@@ -33,12 +33,15 @@ if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
     with open(COOKIES_TIKTOK, "w") as f:
         f.write(os.environ["COOKIES_TIKTOK"])
 
-# --- Cookies Instagram (para baixar vídeos privados) ---
+# Cookies Instagram
 COOKIES_INSTAGRAM = SCRIPT_DIR / "cookies_instagram.txt"
 if "COOKIES_INSTAGRAM" in os.environ:
-    conteudo = os.environ["COOKIES_INSTAGRAM"].replace("\\n", "\n")  # converte \n em linhas reais
+    conteudo = os.environ["COOKIES_INSTAGRAM"].replace("\\n", "\n")
     with open(COOKIES_INSTAGRAM, "w", encoding="utf-8") as f:
         f.write(conteudo)
+
+# Cookies YouTube
+COOKIES_YOUTUBE = SCRIPT_DIR / "cookies_youtube.txt"
 
 # -----------------------
 # Funções JSON gerais
@@ -54,7 +57,7 @@ def salvar_json(caminho, dados):
         json.dump(dados, f)
 
 # -----------------------
-# Premium (estrutura: dict { "<telegram_id>": {"validade": "YYYY-MM-DD"} })
+# Premium
 # -----------------------
 def carregar_premium():
     dados = carregar_json(ARQUIVO_PREMIUM)
@@ -79,9 +82,6 @@ def is_premium(user_id):
         return False
     return validade >= date.today()
 
-# -----------------------
-# Registrar validade
-# -----------------------
 def registrar_validade(user_id, descricao):
     descricao_norm = (descricao or "").strip().lower()
     if "1 mês" in descricao_norm or "1 mes" in descricao_norm:
@@ -156,9 +156,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(mensagem, parse_mode="Markdown", reply_markup=ReplyKeyboardRemove())
 
-# -----------------------
-# Planos (links fixos)
-# -----------------------
 async def planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     planos_disponiveis = [
         {"descricao": "1 Mês", "valor": 9.90, "url": "https://www.asaas.com/c/knu5vub6ejc2yyja"},
@@ -193,19 +190,16 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Baixando...")
 
     try:
-        if "pin.it/" in texto:
-            async with aiohttp.ClientSession() as s:
-                async with s.get(texto, allow_redirects=True) as r:
-                    texto = str(r.url)
-
         out_template = str(DOWNLOADS_DIR / f"%(id)s-%(title)s.%(ext)s")
         ydl_opts = {"outtmpl": out_template, "format": "best", "quiet": True}
 
-        # --- Usa cookies conforme o domínio ---
+        # --- Cookies conforme o domínio ---
         if "instagram.com" in texto and COOKIES_INSTAGRAM.exists():
             ydl_opts["cookiefile"] = str(COOKIES_INSTAGRAM)
         elif "tiktok.com" in texto and COOKIES_TIKTOK.exists():
             ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
+        elif ("youtube.com" in texto or "youtu.be" in texto) and COOKIES_YOUTUBE.exists():
+            ydl_opts["cookiefile"] = str(COOKIES_YOUTUBE)
 
         def run_ydl(url):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -235,7 +229,6 @@ async def premiumlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = "\n".join([f"• {uid} (até {info.get('validade')})" for uid, info in USUARIOS_PREMIUM.items()])
     await update.message.reply_text("💎 Usuários Premium:\n" + texto)
 
-# Comandos administrativos: addpremium e delpremium
 async def addpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
         await update.message.reply_text("🚫 Você não tem permissão para usar este comando.")
