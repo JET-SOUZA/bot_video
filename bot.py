@@ -29,9 +29,17 @@ DOWNLOADS_DIR.mkdir(exist_ok=True)
 
 COOKIES_TIKTOK = SCRIPT_DIR / "cookies.txt"
 
+# --- Cookies Instagram (para baixar vídeos privados) ---
+COOKIES_INSTAGRAM = SCRIPT_DIR / "cookies_instagram.txt"
+
+# Se houver variável de ambiente com cookies, salva em arquivo
 if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
     with open(COOKIES_TIKTOK, "w") as f:
         f.write(os.environ["COOKIES_TIKTOK"])
+
+if "COOKIES_INSTAGRAM" in os.environ and not COOKIES_INSTAGRAM.exists():
+    with open(COOKIES_INSTAGRAM, "w") as f:
+        f.write(os.environ["COOKIES_INSTAGRAM"])
 
 # -----------------------
 # Funções JSON gerais
@@ -78,7 +86,6 @@ def is_premium(user_id):
 # Registrar validade (quando confirmado via Asaas ou addmanual)
 # -----------------------
 def registrar_validade(user_id, descricao):
-    # tenta mapear a descrição para dias; se não conseguir, usa 30 dias por padrão
     descricao_norm = (descricao or "").strip().lower()
     if "1 mês" in descricao_norm or "1 mes" in descricao_norm:
         dias = 30
@@ -87,7 +94,6 @@ def registrar_validade(user_id, descricao):
     elif "1 ano" in descricao_norm or "1 ano" in descricao_norm:
         dias = 365
     else:
-        # se descricao não contiver texto previsível, manter 30 dias
         dias = 30
 
     validade = date.today() + timedelta(days=dias)
@@ -99,7 +105,6 @@ def registrar_validade(user_id, descricao):
 # Notificações automáticas (rodando em background)
 # -----------------------
 async def verificar_vencimentos(app):
-    # loop infinito, roda uma vez por dia
     while True:
         hoje = date.today()
         for user_id, info in list(USUARIOS_PREMIUM.items()):
@@ -123,18 +128,15 @@ async def verificar_vencimentos(app):
                         parse_mode="Markdown"
                     )
                 elif dias_restantes < 0:
-                    # aviso de expiração e remoção
                     await app.bot.send_message(
                         chat_id=int(user_id),
                         text="❌ Seu plano Premium expirou. Torne-se Premium novamente acessando /planos."
                     )
-                    # remove do dicionário
                     USUARIOS_PREMIUM.pop(user_id, None)
                     salvar_premium(USUARIOS_PREMIUM)
             except Exception as e:
                 print(f"[verificar_vencimentos] erro notificando {user_id}: {e}")
 
-        # espera 24h
         await asyncio.sleep(86400)
 
 # -----------------------
@@ -171,9 +173,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(mensagem, parse_mode="Markdown", reply_markup=ReplyKeyboardRemove())
 
-# -----------------------
-# Planos (links fixos)
-# -----------------------
 async def planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     planos_disponiveis = [
         {"descricao": "1 Mês", "valor": 9.90, "url": "https://www.asaas.com/c/knu5vub6ejc2yyja"},
@@ -215,7 +214,11 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         out_template = str(DOWNLOADS_DIR / f"%(id)s-%(title)s.%(ext)s")
         ydl_opts = {"outtmpl": out_template, "format": "best", "quiet": True}
-        if COOKIES_TIKTOK.exists():
+
+        # Usa cookies conforme o domínio do link
+        if "instagram.com" in texto and COOKIES_INSTAGRAM.exists():
+            ydl_opts["cookiefile"] = str(COOKIES_INSTAGRAM)
+        elif "tiktok.com" in texto and COOKIES_TIKTOK.exists():
             ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
 
         def run_ydl(url):
@@ -246,7 +249,6 @@ async def premiumlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = "\n".join([f"• {uid} (até {info.get('validade')})" for uid, info in USUARIOS_PREMIUM.items()])
     await update.message.reply_text("💎 Usuários Premium:\n" + texto)
 
-# comandos administrativos: addpremium e delpremium
 async def addpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
         await update.message.reply_text("🚫 Você não tem permissão para usar este comando.")
@@ -303,11 +305,9 @@ def webhook_asaas():
         return "No telegram ID", 400
 
     if status == "CONFIRMED":
-        # registra validade e salva
         registrar_validade(telegram_id, descricao)
         salvar_premium(USUARIOS_PREMIUM)
 
-        # notifica o usuário
         try:
             validade = USUARIOS_PREMIUM.get(str(telegram_id), {}).get("validade")
             texto = (
@@ -315,12 +315,10 @@ def webhook_asaas():
                 f"✅ Validade até: *{datetime.strptime(validade, '%Y-%m-%d').strftime('%d/%m/%Y')}*\n\n"
                 "Aproveite seus downloads ilimitados! 🚀"
             )
-            # roda uma nova loop temporário para enviar (é seguro aqui)
             asyncio.run(app.bot.send_message(chat_id=telegram_id, text=texto, parse_mode="Markdown"))
         except Exception as e:
             print(f"[webhook_asaas] erro ao notificar usuario {telegram_id}: {e}")
 
-        # notifica o admin (você)
         try:
             texto_admin = (
                 f"📢 Novo Premium confirmado:\nID: {telegram_id}\nPlano: {descricao or 'não informado'}\n"
@@ -334,7 +332,6 @@ def webhook_asaas():
         USUARIOS_PREMIUM.pop(str(telegram_id), None)
         salvar_premium(USUARIOS_PREMIUM)
 
-        # notifica usuario sobre cancelamento/expiração
         try:
             texto = (
                 "❌ *Seu plano Premium foi cancelado ou expirou.*\n\n"
@@ -344,7 +341,6 @@ def webhook_asaas():
         except Exception as e:
             print(f"[webhook_asaas] erro ao notificar cancelamento {telegram_id}: {e}")
 
-        # notifica admin sobre cancelamento
         try:
             texto_admin = f"⚠️ Premium cancelado/expirado: ID {telegram_id} (status {status})"
             asyncio.run(app.bot.send_message(chat_id=ADMIN_ID, text=texto_admin))
@@ -370,7 +366,6 @@ def main():
     threading.Thread(target=run_flask, daemon=True).start()
 
     async def comandos_post_init(app):
-        # registra comandos e inicia verificação diária em background (task no loop do bot)
         await app.bot.set_my_commands([
             BotCommand("start", "Iniciar o bot"),
             BotCommand("planos", "Ver planos Premium"),
@@ -380,13 +375,11 @@ def main():
             BotCommand("addpremium", "Adicionar premium manualmente (admin)"),
             BotCommand("delpremium", "Remover premium manualmente (admin)")
         ])
-        # roda verificação de vencimentos em background
         asyncio.create_task(verificar_vencimentos(app))
 
     global app
     app = ApplicationBuilder().token(TOKEN).post_init(comandos_post_init).build()
 
-    # handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("planos", planos))
     app.add_handler(CommandHandler("duvida", duvida))
@@ -395,7 +388,6 @@ def main():
     app.add_handler(CommandHandler("addpremium", addpremium))
     app.add_handler(CommandHandler("delpremium", delpremium))
 
-    # Mensagens de links (download)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
 
     print("🤖 Bot ativo e monitorando planos premium...")
