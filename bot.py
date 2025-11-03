@@ -1,4 +1,4 @@
-# Jet_TikTokShop Bot v4.6 - Adaptado para Render com suporte YouTube
+# Jet_TikTokShop Bot v4.5 - Adaptado para Render
 # Downloads + Premium Dinâmico via Asaas + Ver ID + TikTok/Instagram/YouTube com cookies + Validade automática + Admin tools
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, BotCommand
@@ -6,8 +6,9 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Con
 import yt_dlp, os, json, aiohttp
 from datetime import datetime, date, timedelta
 from pathlib import Path
-import asyncio, threading
+import asyncio, traceback
 from flask import Flask, request
+import threading
 
 # -----------------------
 # Configurações
@@ -42,8 +43,8 @@ if "COOKIES_INSTAGRAM" in os.environ:
 # Cookies YouTube
 COOKIES_YOUTUBE = SCRIPT_DIR / "cookies_youtube.txt"
 if "COOKIES_YOUTUBE" in os.environ and not COOKIES_YOUTUBE.exists():
-    with open(COOKIES_YOUTUBE, "w") as f:
-        f.write(os.environ["COOKIES_YOUTUBE"])
+    with open(COOKIES_YOUTUBE, "w", encoding="utf-8") as f:
+        f.write(os.environ["COOKIES_YOUTUBE"].replace("\\n", "\n"))
 
 # -----------------------
 # Funções JSON gerais
@@ -84,9 +85,6 @@ def is_premium(user_id):
         return False
     return validade >= date.today()
 
-# -----------------------
-# Registrar validade
-# -----------------------
 def registrar_validade(user_id, descricao):
     descricao_norm = (descricao or "").strip().lower()
     if "1 mês" in descricao_norm or "1 mes" in descricao_norm:
@@ -116,16 +114,11 @@ async def verificar_vencimentos(app):
             dias_restantes = (validade - hoje).days
             try:
                 if dias_restantes == 1:
-                    await app.bot.send_message(chat_id=int(user_id),
-                        text="⚠️ *Seu plano Premium vence amanhã!* Renove para continuar com downloads ilimitados.",
-                        parse_mode="Markdown")
+                    await app.bot.send_message(chat_id=int(user_id), text="⚠️ *Seu plano Premium vence amanhã!* Renove para continuar com downloads ilimitados.", parse_mode="Markdown")
                 elif dias_restantes == 0:
-                    await app.bot.send_message(chat_id=int(user_id),
-                        text="💔 *Seu plano Premium vence hoje!* Renove para não perder o acesso.",
-                        parse_mode="Markdown")
+                    await app.bot.send_message(chat_id=int(user_id), text="💔 *Seu plano Premium vence hoje!* Renove para não perder o acesso.", parse_mode="Markdown")
                 elif dias_restantes < 0:
-                    await app.bot.send_message(chat_id=int(user_id),
-                        text="❌ Seu plano Premium expirou. Torne-se Premium novamente acessando /planos.")
+                    await app.bot.send_message(chat_id=int(user_id), text="❌ Seu plano Premium expirou. Torne-se Premium novamente acessando /planos.")
                     USUARIOS_PREMIUM.pop(user_id, None)
                     salvar_premium(USUARIOS_PREMIUM)
             except Exception as e:
@@ -206,17 +199,16 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     texto = str(r.url)
 
         out_template = str(DOWNLOADS_DIR / f"%(id)s-%(title)s.%(ext)s")
-
-        # Configuração yt-dlp com cookies
         ydl_opts = {"outtmpl": out_template, "format": "best", "quiet": True}
 
+        # --- Usa cookies conforme o domínio ---
         if "instagram.com" in texto and COOKIES_INSTAGRAM.exists():
             ydl_opts["cookiefile"] = str(COOKIES_INSTAGRAM)
         elif "tiktok.com" in texto and COOKIES_TIKTOK.exists():
             ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
         elif "youtube.com" in texto and COOKIES_YOUTUBE.exists():
             ydl_opts["cookiefile"] = str(COOKIES_YOUTUBE)
-            ydl_opts["extractor_args"] = {"youtubetab": {"skip": "authcheck"}}
+            ydl_opts["extractor_args"] = {"youtube": {"skip": "authcheck"}}
 
         def run_ydl(url):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -238,7 +230,7 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Erro: {e}")
 
 # -----------------------
-# Admin
+# Admin: lista e comandos manuais
 # -----------------------
 async def premiumlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
