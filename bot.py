@@ -1,123 +1,104 @@
 import os
-import asyncio
 import yt_dlp
 from fastapi import FastAPI
+from telegram import Update, Bot
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 import nest_asyncio
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-import uvicorn
+import asyncio
 
-# Corrige event loop do Render
 nest_asyncio.apply()
 
-# ==========================
-# 🔹 CONFIGURAÇÕES GERAIS
-# ==========================
-
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-PORT = int(os.getenv("PORT", 10000))
-
-os.makedirs("downloads", exist_ok=True)
-os.makedirs("cookies", exist_ok=True)
-
-# ==========================
-# 🔹 SALVAR COOKIES
-# ==========================
-
-def salvar_cookies():
-    cookies_envs = {
-        "COOKIES_INSTAGRAM": "instagram.txt",
-        "COOKIES_YOUTUBE": "youtube.txt",
-        "COOKIES_TIKTOK": "tiktok.txt",
-        "COOKIES_TWITTER": "twitter.txt"
-    }
-
-    for env, filename in cookies_envs.items():
-        valor = os.getenv(env)
-        if valor:
-            path = os.path.join("cookies", filename)
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(valor)
-            print(f"[OK] Cookie salvo: {env}")
-        else:
-            print(f"[⚠️] Variável {env} não encontrada.")
-
-salvar_cookies()
-
-# ==========================
-# 🔹 FASTAPI SERVIDOR
-# ==========================
+# -----------------------------
+# Configurações do Bot
+# -----------------------------
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+bot = Bot(token=TELEGRAM_TOKEN)
 
 app = FastAPI()
 
-@app.get("/")
-async def home():
-    return {"ok": True, "message": "Servidor e bot rodando corretamente 🚀"}
+# -----------------------------
+# Função para salvar cookies em arquivo
+# -----------------------------
+def salvar_cookies(nome_variavel_env, arquivo_destino):
+    conteudo = os.getenv(nome_variavel_env)
+    if conteudo:
+        with open(arquivo_destino, "w") as f:
+            f.write(conteudo)
+        print(f"[OK] Cookie salvo: {nome_variavel_env}")
+    else:
+        print(f"[⚠️] Variável {nome_variavel_env} não encontrada.")
 
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
+# Salva cookies de todas as plataformas
+salvar_cookies("COOKIES_INSTAGRAM", "instagram_cookies.txt")
+salvar_cookies("COOKIES_YOUTUBE", "youtube_cookies.txt")
+salvar_cookies("COOKIES_TIKTOK", "tiktok_cookies.txt")
+# Twitter opcional
+# salvar_cookies("COOKIES_TWITTER", "twitter_cookies.txt")
 
-# ==========================
-# 🔹 TELEGRAM BOT
-# ==========================
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Envie um link de vídeo para baixar.")
-
-async def baixar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = update.message.text.strip()
-    await update.message.reply_text("⏳ Baixando, aguarde...")
-
-    output_path = "downloads/%(title)s.%(ext)s"
-    cookies = None
-
-    if "instagram.com" in url:
-        cookies = "cookies/instagram.txt"
-    elif "youtube.com" in url or "youtu.be" in url:
-        cookies = "cookies/youtube.txt"
-    elif "tiktok.com" in url:
-        cookies = "cookies/tiktok.txt"
-    elif "x.com" in url or "twitter.com" in url:
-        cookies = "cookies/twitter.txt"
-
+# -----------------------------
+# Função para download de vídeo
+# -----------------------------
+def baixar_video(url, plataforma="youtube"):
     ydl_opts = {
-        "outtmpl": output_path,
+        "outtmpl": "downloads/%(title)s.%(ext)s",
+        "noplaylist": True,
         "quiet": True,
-        "cookiefile": cookies if cookies else None,
     }
+
+    # Configura cookies dependendo da plataforma
+    if plataforma == "youtube":
+        ydl_opts["cookiefile"] = "youtube_cookies.txt"
+    elif plataforma == "instagram":
+        ydl_opts["cookiefile"] = "instagram_cookies.txt"
+    elif plataforma == "tiktok":
+        ydl_opts["cookiefile"] = "tiktok_cookies.txt"
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            nome = ydl.prepare_filename(info)
-        if os.path.exists(nome):
-            await update.message.reply_document(document=open(nome, "rb"))
-            os.remove(nome)
-        else:
-            await update.message.reply_text("❌ Erro: arquivo não encontrado.")
+            return info.get("title", "video")
     except Exception as e:
-        await update.message.reply_text(f"⚠️ Erro: {str(e)}")
+        print(f"[ERRO] Não foi possível baixar o vídeo: {e}")
+        return None
 
-async def iniciar_bot():
-    print("🤖 Iniciando bot do Telegram...")
-    app_tg = ApplicationBuilder().token(TOKEN).build()
-    app_tg.add_handler(CommandHandler("start", start))
-    app_tg.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar))
-    await app_tg.run_polling()
+# -----------------------------
+# Comandos do Telegram
+# -----------------------------
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🤖 Bot ativo! Envie o link do vídeo do YouTube, Instagram ou TikTok.")
 
-# ==========================
-# 🔹 INICIALIZAÇÃO GERAL
-# ==========================
+async def baixar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = update.message.text.strip()
+    if "instagram.com" in url:
+        plataforma = "instagram"
+    elif "youtube.com" in url or "youtu.be" in url:
+        plataforma = "youtube"
+    elif "tiktok.com" in url:
+        plataforma = "tiktok"
+    else:
+        await update.message.reply_text("❌ Plataforma não suportada.")
+        return
 
-async def main():
-    # Inicia o bot e o servidor FastAPI em paralelo
-    bot_task = asyncio.create_task(iniciar_bot())
-    config = uvicorn.Config(app=app, host="0.0.0.0", port=PORT, log_level="info")
-    server = uvicorn.Server(config)
-    api_task = asyncio.create_task(server.serve())
+    await update.message.reply_text("⏳ Baixando vídeo...")
+    titulo = baixar_video(url, plataforma)
+    if titulo:
+        await update.message.reply_text(f"✅ Download concluído: {titulo}")
+    else:
+        await update.message.reply_text("❌ Falha ao baixar o vídeo.")
 
-    await asyncio.gather(bot_task, api_task)
+# -----------------------------
+# Iniciando o bot do Telegram
+# -----------------------------
+application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+application.add_handler(CommandHandler("start", start))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar))
 
-if __name__ == "__main__":
-    asyncio.run(main())
+# Executa o bot em background
+asyncio.create_task(application.run_polling())
+
+# -----------------------------
+# Rota FastAPI apenas para healthcheck
+# -----------------------------
+@app.get("/")
+def root():
+    return {"ok": True}
