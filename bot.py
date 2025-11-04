@@ -1,4 +1,4 @@
-# Jet_TikTokShop Bot v4.6 - Adaptado para Render Webhook
+# Jet_TikTokShop Bot v4.6 - Adaptado para Render
 # Downloads + Premium Dinâmico via Asaas + Ver ID + TikTok/Instagram/YouTube com cookies + Validade automática + Admin tools
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, BotCommand
@@ -8,6 +8,7 @@ from datetime import datetime, date, timedelta
 from pathlib import Path
 import asyncio, traceback
 from flask import Flask, request
+import threading
 
 # -----------------------
 # Configurações
@@ -277,12 +278,6 @@ flask_app = Flask(__name__)
 def health():
     return "OK", 200
 
-@flask_app.route("/webhook_telegram", methods=["POST"])
-def webhook_telegram():
-    update = Update.de_json(request.get_json(force=True), app.bot)
-    app.update_queue.put(update)
-    return "OK", 200
-
 @flask_app.route("/webhook_asaas", methods=["POST"])
 def webhook_asaas():
     data = request.json
@@ -328,12 +323,37 @@ def webhook_asaas():
             print(f"[webhook_asaas] erro ao notificar admin cancelamento: {e}")
     return "OK", 200
 
+@flask_app.route("/webhook_telegram", methods=["POST"])
+def webhook_telegram():
+    update = Update.de_json(request.get_json(force=True), app.bot)
+    app.update_queue.put(update)
+    return "OK", 200
+
+def run_flask():
+    port = int(os.environ.get("PORT", 5000))
+    flask_app.run(host="0.0.0.0", port=port)
+
 # -----------------------
 # Inicialização
 # -----------------------
 def main():
+    threading.Thread(target=run_flask, daemon=True).start()
+
+    async def comandos_post_init(app):
+        await app.bot.set_my_commands([
+            BotCommand("start", "Iniciar o bot"),
+            BotCommand("planos", "Ver planos Premium"),
+            BotCommand("duvida", "Ajuda e contato"),
+            BotCommand("meuid", "Ver seu ID do Telegram"),
+            BotCommand("premiumlist", "Listar usuários premium (admin)"),
+            BotCommand("addpremium", "Adicionar premium manualmente (admin)"),
+            BotCommand("delpremium", "Remover premium manualmente (admin)")
+        ])
+        # Tarefa de verificação de vencimentos
+        asyncio.create_task(verificar_vencimentos(app))
+
     global app
-    app = ApplicationBuilder().token(TOKEN).build()
+    app = ApplicationBuilder().token(TOKEN).post_init(comandos_post_init).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("planos", planos))
@@ -344,10 +364,8 @@ def main():
     app.add_handler(CommandHandler("delpremium", delpremium))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
 
-    # Inicia verificação de vencimentos
-    asyncio.create_task(verificar_vencimentos(app))
-
     print("🤖 Bot pronto e aguardando webhooks...")
+    app.run_polling()  # Se usar webhook, troque para `app.run_webhook(...)`
 
 if __name__ == "__main__":
     main()
