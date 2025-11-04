@@ -186,9 +186,6 @@ def detectar_plataforma(url: str) -> str:
         return "shopee"
     return "outros"
 
-# -----------------------
-# Limpar link Shopee
-# -----------------------
 def limpar_link_shopee(url: str) -> str:
     if "shopee.com" in url and "redir=" in url:
         try:
@@ -206,8 +203,12 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     plataforma = detectar_plataforma(texto)
     user_id = update.message.from_user.id
 
+    # Tratamento especial para Shopee
     if plataforma == "shopee":
-        texto = limpar_link_shopee(texto)
+        await update.message.reply_text(
+            "⚠️ Desculpe, vídeos do Shopee não podem ser baixados diretamente no momento."
+        )
+        return
 
     if not texto.startswith("http"):
         await update.message.reply_text("❌ Envie um link válido.")
@@ -225,7 +226,6 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         out_template = str(DOWNLOADS_DIR / f"%(id)s-%(title)s.%(ext)s")
         ydl_opts = {"outtmpl": out_template, "format": "best", "quiet": True}
 
-        # Cookies automáticos
         if plataforma == "instagram" and COOKIES_INSTAGRAM.exists():
             ydl_opts["cookiefile"] = str(COOKIES_INSTAGRAM)
         elif plataforma == "tiktok" and COOKIES_TIKTOK.exists():
@@ -240,12 +240,7 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return info, ydl
 
         loop = asyncio.get_running_loop()
-        try:
-            info, ydl_obj = await loop.run_in_executor(None, lambda: run_ydl(texto))
-        except Exception as e:
-            await update.message.reply_text(f"❌ Não foi possível baixar este link.\n{e}")
-            return
-
+        info, ydl_obj = await loop.run_in_executor(None, lambda: run_ydl(texto))
         file_path = ydl_obj.prepare_filename(info)
 
         with open(file_path, "rb") as f:
@@ -259,7 +254,141 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Erro inesperado: {e}")
 
 # -----------------------
-# Admin / Webhook / Inicialização
+# Admin: lista e comandos manuais
 # -----------------------
-# Aqui mantemos o Flask e polling do bot igual ao v4.7, sem alterações na lógica.
-# (Inclui webhook_asaas, webhook_telegram, comandos admin add/del premium, health check)
+async def premiumlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID:
+        return
+    texto = "\n".join([f"• {uid} (até {info.get('validade')})" for uid, info in USUARIOS_PREMIUM.items()])
+    await update.message.reply_text("💎 Usuários Premium:\n" + texto)
+
+async def addpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID:
+        await update.message.reply_text("🚫 Você não tem permissão para usar este comando.")
+        return
+    try:
+        telegram_id = str(context.args[0])
+        dias = int(context.args[1])
+    except (IndexError, ValueError):
+        await update.message.reply_text("Uso correto: /addpremium <id> <dias>")
+        return
+    validade = (date.today() + timedelta(days=dias)).strftime("%Y-%m-%d")
+    USUARIOS_PREMIUM[telegram_id] = {"validade": validade}
+    salvar_premium(USUARIOS_PREMIUM)
+    await update.message.reply_text(f"✅ Usuário `{telegram_id}` recebeu acesso premium até {validade}.", parse_mode="Markdown")
+
+async def delpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID:
+        await update.message.reply_text("🚫 Você não tem permissão para usar este comando.")
+        return
+    try:
+        telegram_id = str(context.args[0])
+    except IndexError:
+        await update.message.reply_text("Uso correto: /delpremium <id>")
+        return
+    if telegram_id in USUARIOS_PREMIUM:
+        USUARIOS_PREMIUM.pop(telegram_id, None)
+        salvar_premium(USUARIOS_PREMIUM)
+        await update.message.reply_text(f"❌ Usuário `{telegram_id}` removido do premium.", parse_mode="Markdown")
+    else:
+        await update.message.reply_text(f"⚠️ Usuário `{telegram_id}` não encontrado no premium.", parse_mode="Markdown")
+
+# -----------------------
+# Flask Webhook
+# -----------------------
+flask_app = Flask(__name__)
+
+@flask_app.route("/health", methods=["GET"])
+def health():
+    return "OK", 200
+
+@flask_app.route("/webhook_asaas", methods=["POST"])
+def webhook_asaas():
+    data = request.json
+    status = data.get("status")
+    telegram_id = int(data.get("metadata", {}).get("telegram_id", 0))
+    descricao = data.get("description", "")
+    if telegram_id == 0:
+        return "No telegram ID", 400
+
+    if status == "CONFIRMED":
+        registrar_validade(telegram_id, descricao)
+        salvar_premium(USUARIOS_PREMIUM)
+        try:
+            validade = USUARIOS_PREMIUM.get(str(telegram_id), {}).get("validade")
+            texto = (
+                "💎 *Seu plano Premium foi ativado com sucesso!*\n\n"
+                f"✅ Validade até: *{datetime.strptime(validade, '%Y-%m-%d').strftime('%d/%m/%Y')}*\n\n"
+                "Aproveite seus downloads ilimitados! 🚀"
+            )
+            asyncio.run(app.bot.send_message(chat_id=telegram_id, text=texto, parse_mode="Markdown"))
+        except Exception as e:
+            print(f"[webhook_asaas] erro ao notificar usuario {telegram_id}: {e}")
+        try:
+            texto_admin = (
+                f"📢 Novo Premium confirmado:\nID: {telegram_id}\nPlano: {descricao or 'não informado'}\n"
+                f"Validade: {USUARIOS_PREMIUM.get(str(telegram_id), {}).get('validade')}"
+            )
+            asyncio.run(app.bot.send_message(chat_id=ADMIN_ID, text=texto_admin))
+        except Exception as e:
+            print(f"[webhook_asaas] erro ao notificar admin: {e}")
+    elif status in ["CANCELED", "EXPIRED"]:
+        USUARIOS_PREMIUM.pop(str(telegram_id), None)
+        salvar_premium(USUARIOS_PREMIUM)
+        try:
+            texto = "❌ *Seu plano Premium foi cancelado ou expirou.*\n\nVocê pode renovar a qualquer momento em /planos."
+            asyncio.run(app.bot.send_message(chat_id=telegram_id, text=texto, parse_mode="Markdown"))
+        except Exception as e:
+            print(f"[webhook_asaas] erro ao notificar cancelamento {telegram_id}: {e}")
+        try:
+            texto_admin = f"⚠️ Premium cancelado/expirado: ID {telegram_id} (status {status})"
+            asyncio.run(app.bot.send_message(chat_id=ADMIN_ID, text=texto_admin))
+        except Exception as e:
+            print(f"[webhook_asaas] erro ao notificar admin cancelamento: {e}")
+    return "OK", 200
+
+@flask_app.route("/webhook_telegram", methods=["POST"])
+def webhook_telegram():
+    update = Update.de_json(request.get_json(force=True), app.bot)
+    app.update_queue.put(update)
+    return "OK", 200
+
+def run_flask():
+    port = int(os.environ.get("PORT", 5000))
+    flask_app.run(host="0.0.0.0", port=port)
+
+# -----------------------
+# Inicialização
+# -----------------------
+def main():
+    threading.Thread(target=run_flask, daemon=True).start()
+
+    async def comandos_post_init(app):
+        await app.bot.set_my_commands([
+            BotCommand("start", "Iniciar o bot"),
+            BotCommand("planos", "Ver planos Premium"),
+            BotCommand("duvida", "Ajuda e contato"),
+            BotCommand("meuid", "Ver seu ID do Telegram"),
+            BotCommand("premiumlist", "Listar usuários premium (admin)"),
+            BotCommand("addpremium", "Adicionar premium manualmente (admin)"),
+            BotCommand("delpremium", "Remover premium manualmente (admin)")
+        ])
+        asyncio.create_task(verificar_vencimentos(app))
+
+    global app
+    app = ApplicationBuilder().token(TOKEN).post_init(comandos_post_init).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("planos", planos))
+    app.add_handler(CommandHandler("duvida", duvida))
+    app.add_handler(CommandHandler("meuid", meuid))
+    app.add_handler(CommandHandler("premiumlist", premiumlist))
+    app.add_handler(CommandHandler("addpremium", addpremium))
+    app.add_handler(CommandHandler("delpremium", delpremium))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
+
+    print("🤖 Bot ativo e monitorando planos premium...")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
