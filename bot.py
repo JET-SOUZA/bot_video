@@ -1,5 +1,5 @@
-# Jet_TikTokShop Bot v4.6 - Adaptado para Render
-# Downloads + Premium Dinâmico via Asaas + Ver ID + TikTok/Instagram/YouTube com cookies + Validade automática + Admin tools
+# Jet_TikTokShop Bot v4.5 - Adaptado para Render
+# Downloads + Premium Dinâmico via Asaas + Ver ID + TikTok/Instagram/Shopee com cookies + Validade automática + Admin tools
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, BotCommand
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
@@ -33,15 +33,12 @@ if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
     with open(COOKIES_TIKTOK, "w") as f:
         f.write(os.environ["COOKIES_TIKTOK"])
 
-# Cookies Instagram
+# --- Cookies Instagram (para baixar vídeos privados) ---
 COOKIES_INSTAGRAM = SCRIPT_DIR / "cookies_instagram.txt"
 if "COOKIES_INSTAGRAM" in os.environ:
-    conteudo = os.environ["COOKIES_INSTAGRAM"].replace("\\n", "\n")
+    conteudo = os.environ["COOKIES_INSTAGRAM"].replace("\\n", "\n")  # converte \n em linhas reais
     with open(COOKIES_INSTAGRAM, "w", encoding="utf-8") as f:
         f.write(conteudo)
-
-# Cookies YouTube
-COOKIES_YOUTUBE = SCRIPT_DIR / "cookies_youtube.txt"
 
 # -----------------------
 # Funções JSON gerais
@@ -57,7 +54,7 @@ def salvar_json(caminho, dados):
         json.dump(dados, f)
 
 # -----------------------
-# Premium
+# Premium (estrutura: dict { "<telegram_id>": {"validade": "YYYY-MM-DD"} })
 # -----------------------
 def carregar_premium():
     dados = carregar_json(ARQUIVO_PREMIUM)
@@ -175,7 +172,7 @@ async def meuid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🆔 Seu Telegram ID é: `{update.message.from_user.id}`", parse_mode="Markdown")
 
 # -----------------------
-# Download de vídeo
+# Download de vídeo (corrigido para Shopee)
 # -----------------------
 async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text.strip()
@@ -206,9 +203,9 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ydl_opts["cookiefile"] = str(COOKIES_INSTAGRAM)
         elif "tiktok.com" in texto and COOKIES_TIKTOK.exists():
             ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
-        elif "youtube.com" in texto and COOKIES_YOUTUBE.exists():
-            ydl_opts["cookiefile"] = str(COOKIES_YOUTUBE)
-            ydl_opts["extractor_args"] = {"youtubetab": {"skip": "authcheck"}}
+        elif "shopee.com.br" in texto or "shopee.com" in texto:
+            ydl_opts["extractor_args"] = {"generic": {"skip_download": False}}
+            ydl_opts["http_headers"] = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
         def run_ydl(url):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -230,7 +227,7 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Não foi possível baixar este link.\nErro: {e}")
 
 # -----------------------
-# Admin
+# Admin: lista e comandos manuais
 # -----------------------
 async def premiumlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
@@ -349,7 +346,6 @@ def main():
             BotCommand("addpremium", "Adicionar premium manualmente (admin)"),
             BotCommand("delpremium", "Remover premium manualmente (admin)")
         ])
-        # Tarefa de verificação de vencimentos
         asyncio.create_task(verificar_vencimentos(app))
 
     global app
@@ -364,8 +360,8 @@ def main():
     app.add_handler(CommandHandler("delpremium", delpremium))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
 
-    print("🤖 Bot pronto e aguardando webhooks...")
-    app.run_polling()  # Se usar webhook, troque para `app.run_webhook(...)`
+    print("🤖 Bot ativo e monitorando planos premium...")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
