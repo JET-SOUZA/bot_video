@@ -1,5 +1,5 @@
 # Telegram Bot com suporte a webhooks
-python-telegram-bot[webhooks]==22.14.3
+python-telegram-bot[webhooks]==22.5
 
 # Para downloads de vídeos
 yt-dlp==2025.10.22
