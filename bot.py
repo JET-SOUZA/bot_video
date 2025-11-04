@@ -1,6 +1,5 @@
 # Jet_TikTokShop Bot v4.5 - Adaptado para Render
-# Downloads + Premium Dinâmico via Asaas + Ver ID + TikTok/Instagram com cookies + Validade automática + Admin tools
-# Adicionado suporte a Shopee
+# Downloads + Premium Dinâmico via Asaas + Ver ID + TikTok/Instagram com cookies + Shopee + Admin tools
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, BotCommand
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
@@ -10,7 +9,6 @@ from pathlib import Path
 import asyncio, traceback
 from flask import Flask, request
 import threading
-import re
 
 # -----------------------
 # Configurações
@@ -146,33 +144,6 @@ def incrementar_download(user_id):
     return dados[str(user_id)]["downloads"]
 
 # -----------------------
-# Função auxiliar para Shopee
-# -----------------------
-async def obter_link_shopee(url):
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as r:
-                html = await r.text()
-        # Extrai JSON do video
-        m = re.search(r'window\.__INITIAL_STATE__\s*=\s*(\{.*?\});', html)
-        if not m:
-            return None
-        data = json.loads(m.group(1))
-        # Caminho simplificado para encontrar o video
-        video_url = None
-        try:
-            video_url = data["video"]["video"]["url"]  # Pode mudar dependendo da Shopee
-        except:
-            # Tenta encontrar primeiro link de MP4
-            urls = re.findall(r'https://.*?\.mp4', html)
-            if urls:
-                video_url = urls[0]
-        return video_url
-    except Exception as e:
-        print(f"[Shopee] erro ao obter link: {e}")
-        return None
-
-# -----------------------
 # Comandos do bot
 # -----------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -219,15 +190,12 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Baixando...")
 
     try:
-        # Shopee
+        # ---------- Shopee ----------
         if "sv.shopee.com.br" in texto:
-            link_real = await obter_link_shopee(texto)
-            if not link_real:
-                await update.message.reply_text("❌ Não foi possível obter o vídeo da Shopee.")
-                return
-            texto = link_real
+            await baixar_shopee(update, texto, user_id)
+            return
 
-        # Redirecionamento Pinterest
+        # ---------- TikTok / Instagram ----------
         if "pin.it/" in texto:
             async with aiohttp.ClientSession() as s:
                 async with s.get(texto, allow_redirects=True) as r:
@@ -236,6 +204,7 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         out_template = str(DOWNLOADS_DIR / f"%(id)s-%(title)s.%(ext)s")
         ydl_opts = {"outtmpl": out_template, "format": "best", "quiet": True}
 
+        # --- Usa cookies conforme o domínio ---
         if "instagram.com" in texto and COOKIES_INSTAGRAM.exists():
             ydl_opts["cookiefile"] = str(COOKIES_INSTAGRAM)
         elif "tiktok.com" in texto and COOKIES_TIKTOK.exists():
@@ -258,7 +227,38 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             incrementar_download(user_id)
 
     except Exception as e:
-        await update.message.reply_text(f"Erro: {e}")
+        await update.message.reply_text(f"❌ Não foi possível obter o vídeo: {e}")
+
+# -----------------------
+# Função específica Shopee
+# -----------------------
+async def baixar_shopee(update, url, user_id):
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as r:
+                texto_html = await r.text()
+        # Extrair link direto do vídeo
+        import re
+        m = re.search(r'"video_url":"(https:\\/\\/sv\.shopee\.com\.br\\/.*?\.mp4)"', texto_html)
+        if not m:
+            await update.message.reply_text("❌ Não foi possível obter o vídeo da Shopee.")
+            return
+        video_url = m.group(1).replace("\\/", "/")
+        file_name = DOWNLOADS_DIR / f"shopee_{int(datetime.now().timestamp())}.mp4"
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(video_url) as resp:
+                with open(file_name, "wb") as f:
+                    f.write(await resp.read())
+
+        with open(file_name, "rb") as f:
+            await update.message.reply_video(f, caption="✅ Aqui está seu vídeo da Shopee!")
+
+        os.remove(file_name)
+        if not is_premium(user_id):
+            incrementar_download(user_id)
+    except Exception as e:
+        await update.message.reply_text(f"❌ Erro ao baixar Shopee: {e}")
 
 # -----------------------
 # Admin
