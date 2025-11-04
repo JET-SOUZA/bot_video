@@ -1,12 +1,12 @@
-# Jet_TikTokShop Bot v4.5 - Adaptado para Render
-# Downloads + Premium Dinâmico via Asaas + Ver ID + TikTok/Instagram/Shopee com cookies + Validade automática + Admin tools
+# Jet_TikTokShop Bot v4.6 Webhook - Render
+# Downloads + Premium Dinâmico via Asaas + Ver ID + TikTok/Instagram/YouTube/Shopee + Validade automática + Admin tools
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, BotCommand
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 import yt_dlp, os, json, aiohttp
 from datetime import datetime, date, timedelta
 from pathlib import Path
-import asyncio, traceback
+import asyncio
 from flask import Flask, request
 import threading
 
@@ -27,21 +27,22 @@ SCRIPT_DIR = Path(__file__).parent.resolve()
 DOWNLOADS_DIR = SCRIPT_DIR / "downloads"
 DOWNLOADS_DIR.mkdir(exist_ok=True)
 
-# Cookies TikTok
+# Cookies
 COOKIES_TIKTOK = SCRIPT_DIR / "cookies.txt"
 if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
     with open(COOKIES_TIKTOK, "w") as f:
         f.write(os.environ["COOKIES_TIKTOK"])
 
-# --- Cookies Instagram (para baixar vídeos privados) ---
 COOKIES_INSTAGRAM = SCRIPT_DIR / "cookies_instagram.txt"
 if "COOKIES_INSTAGRAM" in os.environ:
-    conteudo = os.environ["COOKIES_INSTAGRAM"].replace("\\n", "\n")  # converte \n em linhas reais
+    conteudo = os.environ["COOKIES_INSTAGRAM"].replace("\\n", "\n")
     with open(COOKIES_INSTAGRAM, "w", encoding="utf-8") as f:
         f.write(conteudo)
 
+COOKIES_YOUTUBE = SCRIPT_DIR / "cookies_youtube.txt"
+
 # -----------------------
-# Funções JSON gerais
+# JSON utils
 # -----------------------
 def carregar_json(caminho):
     if os.path.exists(caminho):
@@ -54,13 +55,11 @@ def salvar_json(caminho, dados):
         json.dump(dados, f)
 
 # -----------------------
-# Premium (estrutura: dict { "<telegram_id>": {"validade": "YYYY-MM-DD"} })
+# Premium
 # -----------------------
 def carregar_premium():
     dados = carregar_json(ARQUIVO_PREMIUM)
-    if not isinstance(dados, dict):
-        dados = {}
-    return dados
+    return dados if isinstance(dados, dict) else {}
 
 def salvar_premium(dados):
     salvar_json(ARQUIVO_PREMIUM, dados)
@@ -79,16 +78,13 @@ def is_premium(user_id):
         return False
     return validade >= date.today()
 
-# -----------------------
-# Registrar validade
-# -----------------------
 def registrar_validade(user_id, descricao):
     descricao_norm = (descricao or "").strip().lower()
     if "1 mês" in descricao_norm or "1 mes" in descricao_norm:
         dias = 30
     elif "3 meses" in descricao_norm or "3 mes" in descricao_norm:
         dias = 90
-    elif "1 ano" in descricao_norm or "1 ano" in descricao_norm:
+    elif "1 ano" in descricao_norm:
         dias = 365
     else:
         dias = 30
@@ -98,7 +94,7 @@ def registrar_validade(user_id, descricao):
     print(f"[premium] {user_id} -> validade {validade.isoformat()}")
 
 # -----------------------
-# Notificações automáticas
+# Vencimento automático
 # -----------------------
 async def verificar_vencimentos(app):
     while True:
@@ -111,11 +107,16 @@ async def verificar_vencimentos(app):
             dias_restantes = (validade - hoje).days
             try:
                 if dias_restantes == 1:
-                    await app.bot.send_message(chat_id=int(user_id), text="⚠️ *Seu plano Premium vence amanhã!* Renove para continuar com downloads ilimitados.", parse_mode="Markdown")
+                    await app.bot.send_message(chat_id=int(user_id),
+                                               text="⚠️ *Seu plano Premium vence amanhã!* Renove para continuar com downloads ilimitados.",
+                                               parse_mode="Markdown")
                 elif dias_restantes == 0:
-                    await app.bot.send_message(chat_id=int(user_id), text="💔 *Seu plano Premium vence hoje!* Renove para não perder o acesso.", parse_mode="Markdown")
+                    await app.bot.send_message(chat_id=int(user_id),
+                                               text="💔 *Seu plano Premium vence hoje!* Renove para não perder o acesso.",
+                                               parse_mode="Markdown")
                 elif dias_restantes < 0:
-                    await app.bot.send_message(chat_id=int(user_id), text="❌ Seu plano Premium expirou. Torne-se Premium novamente acessando /planos.")
+                    await app.bot.send_message(chat_id=int(user_id),
+                                               text="❌ Seu plano Premium expirou. Torne-se Premium novamente acessando /planos.")
                     USUARIOS_PREMIUM.pop(user_id, None)
                     salvar_premium(USUARIOS_PREMIUM)
             except Exception as e:
@@ -144,7 +145,7 @@ def incrementar_download(user_id):
     return dados[str(user_id)]["downloads"]
 
 # -----------------------
-# Comandos do bot
+# Comandos
 # -----------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mensagem = (
@@ -172,7 +173,7 @@ async def meuid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🆔 Seu Telegram ID é: `{update.message.from_user.id}`", parse_mode="Markdown")
 
 # -----------------------
-# Download de vídeo (corrigido para Shopee)
+# Download de vídeo
 # -----------------------
 async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text.strip()
@@ -190,6 +191,7 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Baixando...")
 
     try:
+        # Redirecionamento Pinterest
         if "pin.it/" in texto:
             async with aiohttp.ClientSession() as s:
                 async with s.get(texto, allow_redirects=True) as r:
@@ -198,14 +200,17 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         out_template = str(DOWNLOADS_DIR / f"%(id)s-%(title)s.%(ext)s")
         ydl_opts = {"outtmpl": out_template, "format": "best", "quiet": True}
 
-        # --- Usa cookies conforme o domínio ---
+        # Cookies
         if "instagram.com" in texto and COOKIES_INSTAGRAM.exists():
             ydl_opts["cookiefile"] = str(COOKIES_INSTAGRAM)
         elif "tiktok.com" in texto and COOKIES_TIKTOK.exists():
             ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
-        elif "shopee.com.br" in texto or "shopee.com" in texto:
-            ydl_opts["extractor_args"] = {"generic": {"skip_download": False}}
-            ydl_opts["http_headers"] = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        elif "youtube.com" in texto or "youtu.be" in texto:
+            if COOKIES_YOUTUBE.exists():
+                ydl_opts["cookiefile"] = str(COOKIES_YOUTUBE)
+        elif "shopee.com" in texto:
+            # Shopee: força extractor de generic
+            ydl_opts["extractor_args"] = {"generic": {"force": True}}
 
         def run_ydl(url):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -224,10 +229,10 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             incrementar_download(user_id)
 
     except Exception as e:
-        await update.message.reply_text(f"❌ Não foi possível baixar este link.\nErro: {e}")
+        await update.message.reply_text(f"Erro: {e}")
 
 # -----------------------
-# Admin: lista e comandos manuais
+# Admin
 # -----------------------
 async def premiumlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
@@ -275,52 +280,7 @@ flask_app = Flask(__name__)
 def health():
     return "OK", 200
 
-@flask_app.route("/webhook_asaas", methods=["POST"])
-def webhook_asaas():
-    data = request.json
-    status = data.get("status")
-    telegram_id = int(data.get("metadata", {}).get("telegram_id", 0))
-    descricao = data.get("description", "")
-    if telegram_id == 0:
-        return "No telegram ID", 400
-
-    if status == "CONFIRMED":
-        registrar_validade(telegram_id, descricao)
-        salvar_premium(USUARIOS_PREMIUM)
-        try:
-            validade = USUARIOS_PREMIUM.get(str(telegram_id), {}).get("validade")
-            texto = (
-                "💎 *Seu plano Premium foi ativado com sucesso!*\n\n"
-                f"✅ Validade até: *{datetime.strptime(validade, '%Y-%m-%d').strftime('%d/%m/%Y')}*\n\n"
-                "Aproveite seus downloads ilimitados! 🚀"
-            )
-            asyncio.run(app.bot.send_message(chat_id=telegram_id, text=texto, parse_mode="Markdown"))
-        except Exception as e:
-            print(f"[webhook_asaas] erro ao notificar usuario {telegram_id}: {e}")
-        try:
-            texto_admin = (
-                f"📢 Novo Premium confirmado:\nID: {telegram_id}\nPlano: {descricao or 'não informado'}\n"
-                f"Validade: {USUARIOS_PREMIUM.get(str(telegram_id), {}).get('validade')}"
-            )
-            asyncio.run(app.bot.send_message(chat_id=ADMIN_ID, text=texto_admin))
-        except Exception as e:
-            print(f"[webhook_asaas] erro ao notificar admin: {e}")
-    elif status in ["CANCELED", "EXPIRED"]:
-        USUARIOS_PREMIUM.pop(str(telegram_id), None)
-        salvar_premium(USUARIOS_PREMIUM)
-        try:
-            texto = "❌ *Seu plano Premium foi cancelado ou expirou.*\n\nVocê pode renovar a qualquer momento em /planos."
-            asyncio.run(app.bot.send_message(chat_id=telegram_id, text=texto, parse_mode="Markdown"))
-        except Exception as e:
-            print(f"[webhook_asaas] erro ao notificar cancelamento {telegram_id}: {e}")
-        try:
-            texto_admin = f"⚠️ Premium cancelado/expirado: ID {telegram_id} (status {status})"
-            asyncio.run(app.bot.send_message(chat_id=ADMIN_ID, text=texto_admin))
-        except Exception as e:
-            print(f"[webhook_asaas] erro ao notificar admin cancelamento: {e}")
-    return "OK", 200
-
-@flask_app.route("/webhook_telegram", methods=["POST"])
+@flask_app.route(f"/{TOKEN}", methods=["POST"])
 def webhook_telegram():
     update = Update.de_json(request.get_json(force=True), app.bot)
     app.update_queue.put(update)
@@ -336,7 +296,7 @@ def run_flask():
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
 
-    async def comandos_post_init(app):
+    async def post_init(app):
         await app.bot.set_my_commands([
             BotCommand("start", "Iniciar o bot"),
             BotCommand("planos", "Ver planos Premium"),
@@ -349,7 +309,7 @@ def main():
         asyncio.create_task(verificar_vencimentos(app))
 
     global app
-    app = ApplicationBuilder().token(TOKEN).post_init(comandos_post_init).build()
+    app = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("planos", planos))
@@ -360,8 +320,12 @@ def main():
     app.add_handler(CommandHandler("delpremium", delpremium))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
 
-    print("🤖 Bot ativo e monitorando planos premium...")
-    app.run_polling()
+    print("🤖 Bot ativo e aguardando webhooks...")
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=int(os.environ.get("PORT", 5000)),
+        url_path=TOKEN
+    )
 
 if __name__ == "__main__":
     main()
