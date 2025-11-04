@@ -1,4 +1,4 @@
-# Jet_TikTokShop Bot v4.6 - Adaptado para Render
+# Jet_TikTokShop Bot v4.7 - Adaptado para Render
 # Downloads + Premium Dinâmico via Asaas + Ver ID + TikTok/Instagram/YouTube com cookies + Validade automática + Admin tools
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, BotCommand
@@ -6,7 +6,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Con
 import yt_dlp, os, json, aiohttp
 from datetime import datetime, date, timedelta
 from pathlib import Path
-import asyncio, traceback
+import asyncio, traceback, re, urllib.parse
 from flask import Flask, request
 import threading
 
@@ -175,10 +175,24 @@ async def meuid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🆔 Seu Telegram ID é: `{update.message.from_user.id}`", parse_mode="Markdown")
 
 # -----------------------
+# Função de limpeza de link Shopee
+# -----------------------
+def limpar_link_shopee(url: str) -> str:
+    """Extrai o link real da Shopee de universal-link"""
+    if "shopee.com" in url and "redir=" in url:
+        try:
+            decoded = urllib.parse.unquote(re.search(r"redir=([^&]+)", url).group(1))
+            return decoded
+        except Exception:
+            return url
+    return url
+
+# -----------------------
 # Download de vídeo
 # -----------------------
 async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text.strip()
+    texto = limpar_link_shopee(texto)
     user_id = update.message.from_user.id
     if not texto.startswith("http"):
         await update.message.reply_text("❌ Envie um link válido.")
@@ -216,7 +230,12 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return info, ydl
 
         loop = asyncio.get_running_loop()
-        info, ydl_obj = await loop.run_in_executor(None, lambda: run_ydl(texto))
+        try:
+            info, ydl_obj = await loop.run_in_executor(None, lambda: run_ydl(texto))
+        except Exception as e:
+            await update.message.reply_text(f"❌ Não foi possível baixar este link.\n{e}")
+            return
+
         file_path = ydl_obj.prepare_filename(info)
 
         with open(file_path, "rb") as f:
@@ -367,4 +386,10 @@ def main():
     app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print("⚠️ Erro fatal no bot:", e)
+        import time
+        time.sleep(5)
+        os._exit(1)
