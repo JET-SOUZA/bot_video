@@ -1,23 +1,9 @@
-# Telegram Bot com suporte a webhooks
 python-telegram-bot[webhooks]==22.5
-
-# Para downloads de vídeos
 yt-dlp==2025.10.22
-aiohttp==3.9.9
-
-# Framework web para webhook Flask
 Flask==3.0.3
-
-# Requisições HTTP
 requests==2.31.0
-
-# Async utilities
 async-timeout==4.0.3
-
-# Dependências opcionais (segurança e compatibilidade)
 certifi==2025.9.24
 charset-normalizer==3.2.0
 idna==3.4
 urllib3==2.0.5
-
-
