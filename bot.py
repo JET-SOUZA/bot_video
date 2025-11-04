@@ -1,12 +1,12 @@
-# Jet_TikTokShop Bot v4.8 Webhook - Adaptado para Render
-# Downloads + Premium Dinâmico via Asaas + Ver ID + TikTok/Instagram/YouTube com cookies + Notificações automáticas
+# Jet_TikTokShop Bot v4.6 - Adaptado para Render Webhook
+# Downloads + Premium Dinâmico via Asaas + Ver ID + TikTok/Instagram/YouTube com cookies + Validade automática + Admin tools
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, BotCommand
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 import yt_dlp, os, json, aiohttp
 from datetime import datetime, date, timedelta
 from pathlib import Path
-import asyncio, threading
+import asyncio, traceback
 from flask import Flask, request
 
 # -----------------------
@@ -15,17 +15,31 @@ from flask import Flask, request
 TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = 5593153639
 LIMITE_DIARIO = 10
+
 ASAAS_API_KEY = os.environ.get("ASAAS_API_KEY")
+ASAAS_BASE_URL = "https://www.asaas.com/api/v3"
 
 ARQUIVO_CONTADOR = "downloads.json"
 ARQUIVO_PREMIUM = "premium.json"
+
 SCRIPT_DIR = Path(__file__).parent.resolve()
 DOWNLOADS_DIR = SCRIPT_DIR / "downloads"
 DOWNLOADS_DIR.mkdir(exist_ok=True)
 
-# Cookies
+# Cookies TikTok
 COOKIES_TIKTOK = SCRIPT_DIR / "cookies.txt"
+if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
+    with open(COOKIES_TIKTOK, "w") as f:
+        f.write(os.environ["COOKIES_TIKTOK"])
+
+# Cookies Instagram
 COOKIES_INSTAGRAM = SCRIPT_DIR / "cookies_instagram.txt"
+if "COOKIES_INSTAGRAM" in os.environ:
+    conteudo = os.environ["COOKIES_INSTAGRAM"].replace("\\n", "\n")
+    with open(COOKIES_INSTAGRAM, "w", encoding="utf-8") as f:
+        f.write(conteudo)
+
+# Cookies YouTube
 COOKIES_YOUTUBE = SCRIPT_DIR / "cookies_youtube.txt"
 
 # -----------------------
@@ -67,13 +81,16 @@ def is_premium(user_id):
         return False
     return validade >= date.today()
 
+# -----------------------
+# Registrar validade
+# -----------------------
 def registrar_validade(user_id, descricao):
     descricao_norm = (descricao or "").strip().lower()
     if "1 mês" in descricao_norm or "1 mes" in descricao_norm:
         dias = 30
     elif "3 meses" in descricao_norm or "3 mes" in descricao_norm:
         dias = 90
-    elif "1 ano" in descricao_norm:
+    elif "1 ano" in descricao_norm or "1 ano" in descricao_norm:
         dias = 365
     else:
         dias = 30
@@ -129,7 +146,7 @@ def incrementar_download(user_id):
     return dados[str(user_id)]["downloads"]
 
 # -----------------------
-# Comandos Telegram
+# Comandos do bot
 # -----------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mensagem = (
@@ -175,10 +192,6 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Baixando...")
 
     try:
-        if "shopee.com.br" in texto:
-            await update.message.reply_text("❌ Não é possível baixar vídeos do Shopee atualmente.")
-            return
-
         if "pin.it/" in texto:
             async with aiohttp.ClientSession() as s:
                 async with s.get(texto, allow_redirects=True) as r:
@@ -187,6 +200,7 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         out_template = str(DOWNLOADS_DIR / f"%(id)s-%(title)s.%(ext)s")
         ydl_opts = {"outtmpl": out_template, "format": "best", "quiet": True}
 
+        # --- Usa cookies conforme o domínio ---
         if "instagram.com" in texto and COOKIES_INSTAGRAM.exists():
             ydl_opts["cookiefile"] = str(COOKIES_INSTAGRAM)
         elif "tiktok.com" in texto and COOKIES_TIKTOK.exists():
@@ -212,7 +226,7 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             incrementar_download(user_id)
 
     except Exception as e:
-        await update.message.reply_text(f"Erro inesperado: {e}")
+        await update.message.reply_text(f"❌ Não foi possível baixar este link.\nErro: {e}")
 
 # -----------------------
 # Admin
@@ -225,34 +239,34 @@ async def premiumlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def addpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
-        await update.message.reply_text("🚫 Você não tem permissão.")
+        await update.message.reply_text("🚫 Você não tem permissão para usar este comando.")
         return
     try:
         telegram_id = str(context.args[0])
         dias = int(context.args[1])
     except (IndexError, ValueError):
-        await update.message.reply_text("Uso: /addpremium <id> <dias>")
+        await update.message.reply_text("Uso correto: /addpremium <id> <dias>")
         return
     validade = (date.today() + timedelta(days=dias)).strftime("%Y-%m-%d")
     USUARIOS_PREMIUM[telegram_id] = {"validade": validade}
     salvar_premium(USUARIOS_PREMIUM)
-    await update.message.reply_text(f"✅ Usuário `{telegram_id}` premium até {validade}.", parse_mode="Markdown")
+    await update.message.reply_text(f"✅ Usuário `{telegram_id}` recebeu acesso premium até {validade}.", parse_mode="Markdown")
 
 async def delpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
-        await update.message.reply_text("🚫 Você não tem permissão.")
+        await update.message.reply_text("🚫 Você não tem permissão para usar este comando.")
         return
     try:
         telegram_id = str(context.args[0])
     except IndexError:
-        await update.message.reply_text("Uso: /delpremium <id>")
+        await update.message.reply_text("Uso correto: /delpremium <id>")
         return
     if telegram_id in USUARIOS_PREMIUM:
         USUARIOS_PREMIUM.pop(telegram_id, None)
         salvar_premium(USUARIOS_PREMIUM)
-        await update.message.reply_text(f"❌ Usuário `{telegram_id}` removido.", parse_mode="Markdown")
+        await update.message.reply_text(f"❌ Usuário `{telegram_id}` removido do premium.", parse_mode="Markdown")
     else:
-        await update.message.reply_text(f"⚠️ Usuário `{telegram_id}` não encontrado.", parse_mode="Markdown")
+        await update.message.reply_text(f"⚠️ Usuário `{telegram_id}` não encontrado no premium.", parse_mode="Markdown")
 
 # -----------------------
 # Flask Webhook
@@ -261,6 +275,12 @@ flask_app = Flask(__name__)
 
 @flask_app.route("/health", methods=["GET"])
 def health():
+    return "OK", 200
+
+@flask_app.route("/webhook_telegram", methods=["POST"])
+def webhook_telegram():
+    update = Update.de_json(request.get_json(force=True), app.bot)
+    app.update_queue.put(update)
     return "OK", 200
 
 @flask_app.route("/webhook_asaas", methods=["POST"])
@@ -278,52 +298,42 @@ def webhook_asaas():
         try:
             validade = USUARIOS_PREMIUM.get(str(telegram_id), {}).get("validade")
             texto = (
-                "💎 *Seu plano Premium foi ativado!*\n"
-                f"✅ Validade até: *{datetime.strptime(validade, '%Y-%m-%d').strftime('%d/%m/%Y')}*"
+                "💎 *Seu plano Premium foi ativado com sucesso!*\n\n"
+                f"✅ Validade até: *{datetime.strptime(validade, '%Y-%m-%d').strftime('%d/%m/%Y')}*\n\n"
+                "Aproveite seus downloads ilimitados! 🚀"
             )
             asyncio.run(app.bot.send_message(chat_id=telegram_id, text=texto, parse_mode="Markdown"))
         except Exception as e:
-            print(f"[webhook_asaas] erro: {e}")
+            print(f"[webhook_asaas] erro ao notificar usuario {telegram_id}: {e}")
+        try:
+            texto_admin = (
+                f"📢 Novo Premium confirmado:\nID: {telegram_id}\nPlano: {descricao or 'não informado'}\n"
+                f"Validade: {USUARIOS_PREMIUM.get(str(telegram_id), {}).get('validade')}"
+            )
+            asyncio.run(app.bot.send_message(chat_id=ADMIN_ID, text=texto_admin))
+        except Exception as e:
+            print(f"[webhook_asaas] erro ao notificar admin: {e}")
     elif status in ["CANCELED", "EXPIRED"]:
         USUARIOS_PREMIUM.pop(str(telegram_id), None)
         salvar_premium(USUARIOS_PREMIUM)
         try:
-            texto = "❌ Seu plano Premium foi cancelado ou expirou."
+            texto = "❌ *Seu plano Premium foi cancelado ou expirou.*\n\nVocê pode renovar a qualquer momento em /planos."
             asyncio.run(app.bot.send_message(chat_id=telegram_id, text=texto, parse_mode="Markdown"))
         except Exception as e:
-            print(f"[webhook_asaas] erro cancelamento: {e}")
+            print(f"[webhook_asaas] erro ao notificar cancelamento {telegram_id}: {e}")
+        try:
+            texto_admin = f"⚠️ Premium cancelado/expirado: ID {telegram_id} (status {status})"
+            asyncio.run(app.bot.send_message(chat_id=ADMIN_ID, text=texto_admin))
+        except Exception as e:
+            print(f"[webhook_asaas] erro ao notificar admin cancelamento: {e}")
     return "OK", 200
-
-@flask_app.route("/webhook_telegram", methods=["POST"])
-def webhook_telegram():
-    update = Update.de_json(request.get_json(force=True), app.bot)
-    app.update_queue.put(update)
-    return "OK", 200
-
-def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    flask_app.run(host="0.0.0.0", port=port)
 
 # -----------------------
 # Inicialização
 # -----------------------
 def main():
-    threading.Thread(target=run_flask, daemon=True).start()
-
-    async def comandos_post_init(app):
-        await app.bot.set_my_commands([
-            BotCommand("start", "Iniciar o bot"),
-            BotCommand("planos", "Ver planos Premium"),
-            BotCommand("duvida", "Ajuda e contato"),
-            BotCommand("meuid", "Ver seu ID"),
-            BotCommand("premiumlist", "Usuários premium (admin)"),
-            BotCommand("addpremium", "Adicionar premium (admin)"),
-            BotCommand("delpremium", "Remover premium (admin)")
-        ])
-        asyncio.create_task(verificar_vencimentos(app))
-
     global app
-    app = ApplicationBuilder().token(TOKEN).post_init(comandos_post_init).build()
+    app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("planos", planos))
@@ -333,6 +343,9 @@ def main():
     app.add_handler(CommandHandler("addpremium", addpremium))
     app.add_handler(CommandHandler("delpremium", delpremium))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
+
+    # Inicia verificação de vencimentos
+    asyncio.create_task(verificar_vencimentos(app))
 
     print("🤖 Bot pronto e aguardando webhooks...")
 
