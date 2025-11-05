@@ -1,4 +1,4 @@
-# Jet_TikTokShop Bot v4.6 - Adaptado para Render com Webhook
+# Jet_TikTokShop Bot v5 - Adaptado para Render com Webhook
 # Downloads + Premium Dinâmico via Asaas + Ver ID + TikTok/Instagram com cookies + Shopee + Admin tools
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, BotCommand
@@ -16,9 +16,8 @@ import threading
 TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = 5593153639
 LIMITE_DIARIO = 10
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # Ex: https://seuapp.onrender.com/webhook_telegram
-
 ASAAS_API_KEY = os.environ.get("ASAAS_API_KEY")
+ASAAS_BASE_URL = "https://www.asaas.com/api/v3"
 
 ARQUIVO_CONTADOR = "downloads.json"
 ARQUIVO_PREMIUM = "premium.json"
@@ -307,12 +306,6 @@ flask_app = Flask(__name__)
 def health():
     return "OK", 200
 
-@flask_app.route("/webhook_telegram", methods=["POST"])
-def webhook_telegram():
-    update = Update.de_json(request.get_json(force=True), app.bot)
-    app.update_queue.put(update)
-    return "OK", 200
-
 @flask_app.route("/webhook_asaas", methods=["POST"])
 def webhook_asaas():
     data = request.json
@@ -358,6 +351,12 @@ def webhook_asaas():
             print(f"[webhook_asaas] erro ao notificar admin cancelamento: {e}")
     return "OK", 200
 
+@flask_app.route("/webhook_telegram", methods=["POST"])
+def webhook_telegram():
+    update = Update.de_json(request.get_json(force=True), app.bot)
+    app.update_queue.put(update)
+    return "OK", 200
+
 def run_flask():
     port = int(os.environ.get("PORT", 5000))
     flask_app.run(host="0.0.0.0", port=port)
@@ -369,6 +368,17 @@ def main():
     threading.Thread(target=run_flask, daemon=True).start()
 
     async def comandos_post_init(app):
+        # Remove webhook antigo (por segurança)
+        try:
+            await app.bot.delete_webhook()
+        except:
+            pass
+
+        # Define webhook atual
+        WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # ex: https://meusite.onrender.com/webhook_telegram
+        if WEBHOOK_URL:
+            await app.bot.set_webhook(WEBHOOK_URL)
+
         await app.bot.set_my_commands([
             BotCommand("start", "Iniciar o bot"),
             BotCommand("planos", "Ver planos Premium"),
@@ -379,9 +389,6 @@ def main():
             BotCommand("delpremium", "Remover premium manualmente (admin)")
         ])
         asyncio.create_task(verificar_vencimentos(app))
-        # Registrar webhook no Telegram
-        await app.bot.set_webhook(WEBHOOK_URL)
-        print(f"🌐 Webhook registrado: {WEBHOOK_URL}")
 
     global app
     app = ApplicationBuilder().token(TOKEN).post_init(comandos_post_init).build()
@@ -395,7 +402,7 @@ def main():
     app.add_handler(CommandHandler("delpremium", delpremium))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
 
-    print("🤖 Bot ativo via Webhook e monitorando planos premium...")
+    print("🤖 Bot ativo e pronto para Webhook...")
     app.run_webhook(
         listen="0.0.0.0",
         port=int(os.environ.get("PORT", 5000)),
