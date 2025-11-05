@@ -1,119 +1,142 @@
 import os
-import base64
 import asyncio
+import base64
+import logging
+import aiohttp
+import aiofiles
 from flask import Flask, request
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-import yt_dlp
-import aiofiles
 
-# === Configurações básicas ===
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}/webhook"
-PORT = int(os.getenv("PORT", 10000))
+# === CONFIGURAÇÕES ===
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+WEBHOOK_URL = os.getenv("RENDER_EXTERNAL_URL", "https://seuapp.onrender.com")
+COOKIES_B64 = os.getenv("COOKIES_IG_B64")
 
-# === Cookies (base64) ===
-def salvar_cookies(nome, valor_b64):
-    if not valor_b64:
-        return None
-    path = f"{nome}.txt"
-    try:
-        data = base64.b64decode(valor_b64).decode("utf-8")
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(data)
-        print(f"✅ Cookies salvos em {path}")
-        return path
-    except Exception as e:
-        print(f"❌ Erro ao decodificar cookies {nome}: {e}")
-        return None
+if not TOKEN:
+    raise ValueError("❌ Variável TELEGRAM_TOKEN não configurada.")
+if not COOKIES_B64:
+    raise ValueError("❌ Variável COOKIES_IG_B64 não configurada.")
 
-COOKIES_IG = salvar_cookies("cookies_instagram", os.getenv("COOKIES_IG_B64"))
-COOKIES_SHOPEE = salvar_cookies("cookies_shopee", os.getenv("COOKIES_SHOPEE_B64"))
+# Caminho dos downloads
+DOWNLOAD_DIR = os.path.join(os.getcwd(), "downloads")
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# === Inicializa bot + Flask ===
-app_flask = Flask(__name__)
-app = Application.builder().token(BOT_TOKEN).build()
+# === CONFIGURAÇÃO DE LOG ===
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-# === Função principal de download ===
-async def baixar_video(url: str, cookies_path: str | None):
-    print(f"⬇️ Iniciando download: {url}")
-    os.makedirs("downloads", exist_ok=True)
+# === SALVAR COOKIES DECODIFICADOS ===
+COOKIES_PATH = os.path.join(DOWNLOAD_DIR, "cookies_instagram.txt")
+with open(COOKIES_PATH, "wb") as f:
+    f.write(base64.b64decode(COOKIES_B64))
+logger.info(f"✅ Cookies salvos em {COOKIES_PATH}")
 
+# === FUNÇÕES ===
+
+async def baixar_instagram(url: str) -> str:
+    """Baixa vídeos do Instagram (post ou story)."""
+    import yt_dlp
+
+    output_path = os.path.join(DOWNLOAD_DIR, "%(id)s.%(ext)s")
     ydl_opts = {
-        "outtmpl": "downloads/%(id)s.%(ext)s",
+        "format": "best",
+        "outtmpl": output_path,
         "quiet": True,
-        "cookiefile": cookies_path,
+        "cookiefile": COOKIES_PATH,
+        "noplaylist": True,
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            return ydl.prepare_filename(info)
+            video_id = info.get("id")
+            ext = info.get("ext", "mp4")
+            file_path = os.path.join(DOWNLOAD_DIR, f"{video_id}.{ext}")
+
+            # Se o arquivo vier com ".NA", tenta renomear
+            if not os.path.exists(file_path):
+                for arquivo in os.listdir(DOWNLOAD_DIR):
+                    if arquivo.startswith(video_id) and arquivo.endswith(".NA"):
+                        novo_nome = f"{video_id}.mp4"
+                        os.rename(os.path.join(DOWNLOAD_DIR, arquivo), os.path.join(DOWNLOAD_DIR, novo_nome))
+                        file_path = os.path.join(DOWNLOAD_DIR, novo_nome)
+                        break
+
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"Arquivo não encontrado: {file_path}")
+
+            return file_path
+
     except Exception as e:
-        print(f"❌ Erro no yt_dlp: {e}")
-        return None
+        logger.error(f"Erro ao baixar vídeo: {e}")
+        raise
 
-# === Manipulador de mensagens ===
-async def receber_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text:
-        return
 
+# === HANDLERS ===
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("👋 Envie um link do Instagram para baixar o vídeo ou story!")
+
+async def handle_instagram(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
-
-    if "shopee" in url:
-        cookies_path = COOKIES_SHOPEE
-    elif "instagram" in url:
-        cookies_path = COOKIES_IG
-    else:
-        await update.message.reply_text("❌ Envie um link válido do Instagram ou Shopee.")
+    if "instagram.com" not in url:
+        await update.message.reply_text("⚠️ Envie um link válido do Instagram.")
         return
 
-    await update.message.reply_text("⏳ Baixando vídeo, aguarde...")
+    await update.message.reply_text("⬇️ Baixando vídeo... aguarde.")
 
     try:
-        file_path = await baixar_video(url, cookies_path)
-        if file_path and os.path.exists(file_path):
+        file_path = await baixar_instagram(url)
+        if os.path.exists(file_path):
             async with aiofiles.open(file_path, "rb") as f:
-                data = await f.read()
-            await update.message.reply_video(data, caption="✅ Aqui está seu vídeo!")
+                await update.message.reply_video(video=await f.read())
             os.remove(file_path)
         else:
-            await update.message.reply_text("❌ Erro ao baixar: arquivo não encontrado.")
+            await update.message.reply_text("❌ Arquivo não encontrado após o download.")
     except Exception as e:
-        await update.message.reply_text(f"❌ Erro ao baixar: {e}")
-        print(f"Erro ao enviar vídeo: {e}")
+        await update.message.reply_text(f"Erro ao baixar: {e}")
+        logger.error(e)
 
-# === Comandos ===
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 Envie um link do Instagram ou Shopee para baixar o vídeo.")
 
-# === Flask Webhook ===
-@app_flask.route("/")
-def home():
-    return "Bot ativo 🚀"
+# === FLASK APP (para WEBHOOK) ===
 
-@app_flask.route("/webhook", methods=["POST"])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), app.bot)
-    asyncio.run(app.process_update(update))
-    return "ok", 200
+app = Flask(__name__)
+application = Application.builder().token(TOKEN).build()
 
-# === Função principal ===
-async def configurar_webhook():
-    try:
-        await app.bot.delete_webhook()
-        await app.bot.set_webhook(WEBHOOK_URL)
-        print(f"✅ Webhook configurado: {WEBHOOK_URL}")
-    except Exception as e:
-        print(f"❌ Erro ao configurar webhook: {e}")
+@app.route("/webhook", methods=["POST"])
+async def webhook():
+    data = request.get_json(force=True)
+    update = Update.de_json(data, application.bot)
+    await application.process_update(update)
+    return "OK", 200
 
-def main():
-    print("🤖 Bot ativo e pronto para Webhook...")
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem))
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(configurar_webhook())
-    app_flask.run(host="0.0.0.0", port=PORT)
+@app.route("/health")
+def health():
+    return {"ok": True}, 200
+
+# === SETUP FINAL ===
+
+async def main():
+    await application.bot.delete_webhook()
+    webhook_url = f"{WEBHOOK_URL}/webhook"
+    await application.bot.set_webhook(webhook_url)
+    logger.info(f"🤖 Bot ativo e pronto para Webhook em {webhook_url}")
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_instagram))
+
+    from hypercorn.asyncio import serve
+    from hypercorn.config import Config
+
+    config = Config()
+    config.bind = ["0.0.0.0:10000"]
+    await serve(app, config)
 
 if __name__ == "__main__":
-    main()
+    import nest_asyncio
+    nest_asyncio.apply()
+    asyncio.run(main())
