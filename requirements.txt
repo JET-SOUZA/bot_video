@@ -1,8 +1,10 @@
 yt-dlp==2025.10.22
-requests==2.32.5
-pyppeteer==2.0.0
-Flask[async]==3.1.0
+requests==2.32.3
 aiohttp==3.10.10
+Flask[async]==3.1.0
 python-telegram-bot==20.7
 nest_asyncio==1.6.0
 aiofiles==23.2.1
+pyppeteer==2.0.0
+
+
