@@ -291,8 +291,8 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             raise FileNotFoundError(f"Arquivo não encontrado após o download: {file_path}")
 
         print(f"[baixar_video] Enviando arquivo {file_path} para {user_id}")
-        with open(file_path, "rb") as f:
-            await update.message.reply_video(_
+       with open(file_path, "rb") as f:
+    await update.message.reply_video(f, caption="✅ Aqui está seu vídeo!")
 
 
 
@@ -338,6 +338,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
