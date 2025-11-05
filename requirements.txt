@@ -6,6 +6,7 @@ python-telegram-bot==20.7
 nest_asyncio==1.6.0
 aiofiles==23.2.1
 pyppeteer==2.0.0
-beautifulsoup4==4.12.2
+
+
 
 
