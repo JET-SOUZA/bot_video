@@ -287,13 +287,13 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         file_path = str(DOWNLOADS_DIR / f)
                         break
 
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"Arquivo não encontrado após o download: {file_path}")
-
-        print(f"[baixar_video] Enviando arquivo {file_path} para {user_id}")
-       with open(file_path, "rb") as f:
-    await update.message.reply_video(f, caption="✅ Aqui está seu vídeo!")
-
+        file_path = os.path.join("downloads", file_name)
+if os.path.exists(file_path):
+    with open(file_path, "rb") as f:
+        await update.message.reply_video(f, caption="✅ Aqui está seu vídeo!")
+    os.remove(file_path)
+else:
+    await update.message.reply_text("Erro ao baixar: Arquivo não encontrado após o download.")
 
 
 # -----------------------
@@ -338,6 +338,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
