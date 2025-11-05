@@ -6,4 +6,4 @@ aiohttp==3.10.10
 python-telegram-bot==20.7
 nest_asyncio==1.6.0
 python-telegram-bot[job-queue]
-aiofiles
+aiofiles==23.2.1
