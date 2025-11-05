@@ -190,8 +190,10 @@ async def duvida(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def meuid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🆔 Seu Telegram ID é: `{update.message.from_user.id}`", parse_mode="Markdown")
 
+import base64
+
 # -----------------------
-# Download de vídeo (corrigido)
+# Download de vídeo (corrigido e compatível com cookies IG/Shopee)
 # -----------------------
 async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text.strip()
@@ -214,7 +216,7 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 async with s.get(texto, allow_redirects=True) as r:
                     texto = str(r.url)
 
-        # Nome de arquivo seguro
+        # Nome seguro de saída
         safe_id = "".join(c for c in texto if c.isalnum())[-12:]
         out_template = str(DOWNLOADS_DIR / f"{safe_id}.%(ext)s")
 
@@ -225,22 +227,40 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "retries": 3
         }
 
+        # Função para salvar cookies
+        def salvar_cookie_env(nome_variavel, arquivo_destino):
+            conteudo = os.environ.get(nome_variavel)
+            if not conteudo:
+                return None
+            try:
+                # tenta decodificar base64
+                decoded = base64.b64decode(conteudo).decode("utf-8")
+                conteudo = decoded
+            except Exception:
+                pass  # já está em texto plano
+            conteudo = conteudo.replace("\\n", "\n").replace("\r\n", "\n")
+            if not conteudo.startswith("# Netscape"):
+                conteudo = "# Netscape HTTP Cookie File\n" + conteudo
+            with open(arquivo_destino, "w", encoding="utf-8") as f:
+                f.write(conteudo)
+            return arquivo_destino
+
         # --- Usa cookies conforme o domínio ---
         if "instagram.com" in texto:
-            cookies_ig = os.environ.get("COOKIES_IG_B64")
-            if cookies_ig:
-                with open("cookies_instagram.txt", "w", encoding="utf-8") as f:
-                    f.write(cookies_ig.replace("\\n", "\n"))
-                ydl_opts["cookiefile"] = "cookies_instagram.txt"
+            cookie_path = salvar_cookie_env("COOKIES_IG_B64", "cookies_instagram.txt")
+            if cookie_path:
+                ydl_opts["cookiefile"] = cookie_path
+                print("[COOKIES] Usando cookies do Instagram.")
         elif "shopee.com" in texto:
-            cookies_shopee = os.environ.get("COOKIES_SHOPEE_B64")
-            if cookies_shopee:
-                with open("cookies_shopee.txt", "w", encoding="utf-8") as f:
-                    f.write(cookies_shopee.replace("\\n", "\n"))
-                ydl_opts["cookiefile"] = "cookies_shopee.txt"
+            cookie_path = salvar_cookie_env("COOKIES_SHOPEE_B64", "cookies_shopee.txt")
+            if cookie_path:
+                ydl_opts["cookiefile"] = cookie_path
+                print("[COOKIES] Usando cookies da Shopee.")
         elif "tiktok.com" in texto and COOKIES_TIKTOK.exists():
             ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
+            print("[COOKIES] Usando cookies do TikTok.")
 
+        # --- Download ---
         def run_ydl(url):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
@@ -250,7 +270,7 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         info, ydl_obj = await loop.run_in_executor(None, lambda: run_ydl(texto))
         file_path = ydl_obj.prepare_filename(info)
 
-        # Força extensão mp4 se estiver sem
+        # Força extensão .mp4 se não detectada
         if not os.path.splitext(file_path)[1]:
             file_path += ".mp4"
 
@@ -268,6 +288,7 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         traceback.print_exc()
         await update.message.reply_text(f"Erro ao baixar: {e}")
+
 
 
 # -----------------------
@@ -312,4 +333,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
