@@ -1,7 +1,7 @@
-# Jet_TikTokShop Bot v4.6 - Adaptado para Render
-# Downloads + Premium Dinâmico via Asaas + Ver ID + TikTok com cookies + Shopee Universal Link + fallback robusto
+# Jet_TikTokShop Bot v4.7 - Adaptado para Render
+# Downloads + Premium Dinâmico via Asaas + Ver ID + TikTok/Instagram/YouTube + Shopee Universal Link Resolvido
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, BotCommand, InputFile
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 import yt_dlp, os, json, aiohttp
 from datetime import datetime, date
@@ -10,6 +10,7 @@ import asyncio, traceback
 from flask import Flask, request
 import threading
 import urllib.parse
+from bs4 import BeautifulSoup
 
 # -----------------------
 # Configurações
@@ -29,7 +30,6 @@ DOWNLOADS_DIR = SCRIPT_DIR / "downloads"
 DOWNLOADS_DIR.mkdir(exist_ok=True)
 
 COOKIES_TIKTOK = SCRIPT_DIR / "cookies.txt"
-
 if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
     with open(COOKIES_TIKTOK, "w") as f:
         f.write(os.environ["COOKIES_TIKTOK"])
@@ -84,23 +84,30 @@ def incrementar_download(user_id):
     return dados[str(user_id)]["downloads"]
 
 # -----------------------
-# Função para resolver links Shopee
+# Resolver links Shopee
 # -----------------------
 async def resolver_link_shopee(url: str) -> str:
-    """Resolve links encurtados ou 'universal-link' da Shopee."""
+    """Resolve universal-links da Shopee e extrai link real do vídeo"""
     try:
+        # Universal-link
         if "shopee.com.br/universal-link" in url and "redir=" in url:
             parsed = urllib.parse.urlparse(url)
             qs = urllib.parse.parse_qs(parsed.query)
             redir = qs.get("redir", [None])[0]
             if redir:
-                return urllib.parse.unquote(redir)
+                url = urllib.parse.unquote(redir)
 
         if "sv.shopee.com.br" in url:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, allow_redirects=True) as resp:
+                    html = await resp.text()
+                    soup = BeautifulSoup(html, "html.parser")
+                    # Tenta extrair meta og:video
+                    meta = soup.find("meta", property="og:video")
+                    if meta and meta.get("content"):
+                        return meta["content"]
+                    # fallback: retorna url original
                     return str(resp.url)
-
     except Exception as e:
         print(f"[Shopee resolver] erro: {e}")
     return url
@@ -137,7 +144,7 @@ async def meuid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🆔 Seu Telegram ID é: `{user_id}`", parse_mode="Markdown")
 
 # -----------------------
-# Download de vídeo com fallback robusto
+# Download de vídeo com Shopee fix
 # -----------------------
 async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text.strip()
@@ -159,11 +166,6 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Resolver Shopee
         if "shopee.com.br" in texto:
             texto = await resolver_link_shopee(texto)
-
-        if "pin.it/" in texto:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(texto, allow_redirects=True) as resp:
-                    texto = str(resp.url)
 
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         out_template = str(DOWNLOADS_DIR / f"%(id)s-{timestamp}.%(ext)s")
@@ -196,13 +198,12 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         loop = asyncio.get_running_loop()
         info, ydl_obj = await loop.run_in_executor(None, lambda: run_ydl(texto))
 
-        # Fallback robusto para localizar arquivo
+        # Localiza arquivo baixado
         candidato = None
         try:
             candidato = ydl_obj.prepare_filename(info)
         except Exception:
             pass
-
         if not candidato or not os.path.exists(candidato):
             arquivos = sorted(DOWNLOADS_DIR.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True)
             candidato = str(arquivos[0]) if arquivos else None
@@ -269,18 +270,14 @@ def webhook_asaas():
     data = request.json
     status = data.get("status")
     telegram_id = int(data.get("metadata", {}).get("telegram_id", 0))
-
     if telegram_id == 0:
         return "No telegram ID", 400
-
     if status == "CONFIRMED":
         USUARIOS_PREMIUM.add(telegram_id)
         salvar_premium(USUARIOS_PREMIUM)
     elif status in ["CANCELED", "EXPIRED"]:
-        if telegram_id in USUARIOS_PREMIUM:
-            USUARIOS_PREMIUM.remove(telegram_id)
-            salvar_premium(USUARIOS_PREMIUM)
-
+        USUARIOS_PREMIUM.discard(telegram_id)
+        salvar_premium(USUARIOS_PREMIUM)
     return "OK", 200
 
 @flask_app.route("/webhook_telegram", methods=["POST"])
@@ -302,10 +299,10 @@ def main():
 
     async def comandos_post_init(app):
         await app.bot.set_my_commands([
-            BotCommand("start", "Iniciar o bot"),
-            BotCommand("planos", "Ver planos Premium"),
-            BotCommand("duvida", "Ajuda e contato"),
-            BotCommand("meuid", "Ver seu ID do Telegram")
+            ("start", "Iniciar o bot"),
+            ("planos", "Ver planos Premium"),
+            ("duvida", "Ajuda e contato"),
+            ("meuid", "Ver seu ID do Telegram")
         ])
 
     global app
