@@ -191,13 +191,12 @@ async def meuid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🆔 Seu Telegram ID é: `{update.message.from_user.id}`", parse_mode="Markdown")
 
 # -----------------------
-# Download de vídeo (com cookies)
+# Download de vídeo (corrigido)
 # -----------------------
 async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = update.message.text.strip()
+    texto = update.message.text.strip()
     user_id = update.message.from_user.id
-
-    if not url.startswith("http"):
+    if not texto.startswith("http"):
         await update.message.reply_text("❌ Envie um link válido.")
         return
 
@@ -210,34 +209,66 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Baixando...")
 
     try:
-        out_template = str(DOWNLOADS_DIR / f"%(id)s-%(title)s.%(ext)s")
-        ydl_opts = {"outtmpl": out_template, "format": "best", "quiet": True}
+        if "pin.it/" in texto:
+            async with aiohttp.ClientSession() as s:
+                async with s.get(texto, allow_redirects=True) as r:
+                    texto = str(r.url)
 
-        if "tiktok.com" in url and COOKIES_TIKTOK.exists():
+        # Nome de arquivo seguro
+        safe_id = "".join(c for c in texto if c.isalnum())[-12:]
+        out_template = str(DOWNLOADS_DIR / f"{safe_id}.%(ext)s")
+
+        ydl_opts = {
+            "outtmpl": out_template,
+            "format": "best",
+            "quiet": True,
+            "retries": 3
+        }
+
+        # --- Usa cookies conforme o domínio ---
+        if "instagram.com" in texto:
+            cookies_ig = os.environ.get("COOKIES_IG_B64")
+            if cookies_ig:
+                with open("cookies_instagram.txt", "w", encoding="utf-8") as f:
+                    f.write(cookies_ig.replace("\\n", "\n"))
+                ydl_opts["cookiefile"] = "cookies_instagram.txt"
+        elif "shopee.com" in texto:
+            cookies_shopee = os.environ.get("COOKIES_SHOPEE_B64")
+            if cookies_shopee:
+                with open("cookies_shopee.txt", "w", encoding="utf-8") as f:
+                    f.write(cookies_shopee.replace("\\n", "\n"))
+                ydl_opts["cookiefile"] = "cookies_shopee.txt"
+        elif "tiktok.com" in texto and COOKIES_TIKTOK.exists():
             ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
-        elif "instagram.com" in url and COOKIES_IG.exists():
-            ydl_opts["cookiefile"] = str(COOKIES_IG)
-        elif "shopee" in url and COOKIES_SHOPEE.exists():
-            ydl_opts["cookiefile"] = str(COOKIES_SHOPEE)
 
-        def run_ydl(u):
+        def run_ydl(url):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(u, download=True)
+                info = ydl.extract_info(url, download=True)
                 return info, ydl
 
         loop = asyncio.get_running_loop()
-        info, ydl_obj = await loop.run_in_executor(None, lambda: run_ydl(url))
-        path = ydl_obj.prepare_filename(info)
+        info, ydl_obj = await loop.run_in_executor(None, lambda: run_ydl(texto))
+        file_path = ydl_obj.prepare_filename(info)
 
-        with open(path, "rb") as f:
+        # Força extensão mp4 se estiver sem
+        if not os.path.splitext(file_path)[1]:
+            file_path += ".mp4"
+
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Arquivo não encontrado após o download: {file_path}")
+
+        print(f"[baixar_video] Enviando arquivo {file_path} para {user_id}")
+        with open(file_path, "rb") as f:
             await update.message.reply_video(f, caption="✅ Aqui está seu vídeo!")
 
-        os.remove(path)
+        os.remove(file_path)
         if not is_premium(user_id):
             incrementar_download(user_id)
 
     except Exception as e:
+        traceback.print_exc()
         await update.message.reply_text(f"Erro ao baixar: {e}")
+
 
 # -----------------------
 # Flask Webhook
@@ -281,3 +312,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
