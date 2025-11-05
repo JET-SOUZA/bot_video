@@ -1,5 +1,5 @@
-# Jet_TikTokShop Bot v4.5 - Adaptado para Render
-# Downloads + Premium Dinâmico via Asaas + Ver ID + TikTok com cookies + Shopee Universal Link
+# Jet_TikTokShop Bot v4.6 - Adaptado para Render
+# Downloads + Premium Dinâmico via Asaas + Ver ID + TikTok com cookies + Shopee Universal Link + fallback robusto
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, BotCommand, InputFile
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
@@ -58,14 +58,8 @@ def salvar_premium(usuarios):
     salvar_json(ARQUIVO_PREMIUM, {"premium_users": list(usuarios)})
 
 USUARIOS_PREMIUM = carregar_premium()
-
-# IDs Premium fixos
-ID_PREMIUM_1 = 5593153639
-ID_PREMIUM_2 = 0
-ID_PREMIUM_3 = 0
-ID_PREMIUM_4 = 0
-
-USUARIOS_PREMIUM.update({ID_PREMIUM_1, ID_PREMIUM_2, ID_PREMIUM_3, ID_PREMIUM_4})
+ID_PREMIUM_FIXOS = {5593153639, 0, 0, 0}
+USUARIOS_PREMIUM.update(ID_PREMIUM_FIXOS)
 salvar_premium(USUARIOS_PREMIUM)
 
 # -----------------------
@@ -95,26 +89,21 @@ def incrementar_download(user_id):
 async def resolver_link_shopee(url: str) -> str:
     """Resolve links encurtados ou 'universal-link' da Shopee."""
     try:
-        # Caso tenha parâmetro redir= (universal link)
         if "shopee.com.br/universal-link" in url and "redir=" in url:
             parsed = urllib.parse.urlparse(url)
             qs = urllib.parse.parse_qs(parsed.query)
             redir = qs.get("redir", [None])[0]
             if redir:
-                redir_decoded = urllib.parse.unquote(redir)
-                return redir_decoded
+                return urllib.parse.unquote(redir)
 
-        # Caso o link seja curto (sv.shopee.com.br/share-video/...)
         if "sv.shopee.com.br" in url:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, allow_redirects=True) as resp:
-                    final_url = str(resp.url)
-                    return final_url
+                    return str(resp.url)
 
     except Exception as e:
         print(f"[Shopee resolver] erro: {e}")
-
-    return url  # retorna original se falhar
+    return url
 
 # -----------------------
 # Comandos do bot
@@ -148,7 +137,7 @@ async def meuid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🆔 Seu Telegram ID é: `{user_id}`", parse_mode="Markdown")
 
 # -----------------------
-# Download de vídeo
+# Download de vídeo com fallback robusto
 # -----------------------
 async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text.strip()
@@ -167,7 +156,7 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Preparando download...", parse_mode="Markdown")
 
     try:
-        # Resolver Shopee se for o caso
+        # Resolver Shopee
         if "shopee.com.br" in texto:
             texto = await resolver_link_shopee(texto)
 
@@ -188,7 +177,10 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "geo_bypass": True,
             "nocheckcertificate": True,
             "retries": 3,
-            "no_warnings": True
+            "no_warnings": True,
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
+            }
         }
 
         if COOKIES_TIKTOK.exists():
@@ -204,9 +196,14 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         loop = asyncio.get_running_loop()
         info, ydl_obj = await loop.run_in_executor(None, lambda: run_ydl(texto))
 
+        # Fallback robusto para localizar arquivo
+        candidato = None
         try:
             candidato = ydl_obj.prepare_filename(info)
         except Exception:
+            pass
+
+        if not candidato or not os.path.exists(candidato):
             arquivos = sorted(DOWNLOADS_DIR.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True)
             candidato = str(arquivos[0]) if arquivos else None
 
