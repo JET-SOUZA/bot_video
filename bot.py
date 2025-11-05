@@ -94,38 +94,85 @@ async def baixar_video(url: str) -> str:
             ydl_opts["cookiefile"] = str(COOKIES_YOUTUBE)
 
         # Executa o download
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
-            if os.path.exists(filename):
-                return filename
-            raise FileNotFoundError(f"Arquivo não encontrado após o download: {filename}")
+        async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    texto = update.message.text.strip()
+    user_id = update.message.from_user.id
 
-    except Exception as e:
-        logger.error(f"Erro ao baixar vídeo: {e}")
-        return None
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Processa mensagens de texto com links."""
-    if not update.message or not update.message.text:
+    if not texto.startswith("http"):
+        await update.message.reply_text("❌ Envie um link válido.")
         return
 
-    url = update.message.text.strip()
-    chat_id = update.effective_chat.id
-    await update.message.reply_text("🔄 Baixando o vídeo, aguarde...")
+    if not is_premium(user_id):
+        usados = verificar_limite(user_id)
+        if usados >= LIMITE_DIARIO:
+            await update.message.reply_text("⚠️ Limite diário atingido. Assine Premium!")
+            return
 
-    file_path = await baixar_video(url)
-    if not file_path:
-        await context.bot.send_message(chat_id, "❌ Erro ao baixar o vídeo. Verifique o link ou os cookies.")
-        return
+    await update.message.reply_text("⏳ Baixando... aguarde alguns segundos...")
 
     try:
-        async with aiofiles.open(file_path, "rb") as f:
-            await context.bot.send_video(chat_id=chat_id, video=await f.read())
+        # Caso o link seja um redirecionamento (como pin.it)
+        if "pin.it/" in texto:
+            async with aiohttp.ClientSession() as s:
+                async with s.get(texto, allow_redirects=True) as r:
+                    texto = str(r.url)
+
+        out_template = str(DOWNLOADS_DIR / f"%(id)s-%(title)s.%(ext)s")
+        ydl_opts = {
+            "outtmpl": out_template,
+            "quiet": True,
+            "format": "best[height<=720]",  # limita a 720p (evita arquivos enormes)
+        }
+
+        # --- Usa cookies conforme o domínio ---
+        if "instagram.com" in texto and COOKIES_INSTAGRAM.exists():
+            ydl_opts["cookiefile"] = str(COOKIES_INSTAGRAM)
+        elif "tiktok.com" in texto and COOKIES_TIKTOK.exists():
+            ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
+        elif "shopee" in texto:
+            # suporte para Shopee (cookies via variável base64)
+            cookies_shopee_path = SCRIPT_DIR / "cookies_shopee.txt"
+            if "COOKIES_SHOPEE_B64" in os.environ:
+                import base64
+                conteudo = base64.b64decode(os.environ["COOKIES_SHOPEE_B64"]).decode("utf-8")
+                with open(cookies_shopee_path, "w", encoding="utf-8") as f:
+                    f.write(conteudo)
+                ydl_opts["cookiefile"] = str(cookies_shopee_path)
+
+        # --- Execução do download ---
+        def run_ydl(url):
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                return info, ydl
+
+        loop = asyncio.get_running_loop()
+        info, ydl_obj = await loop.run_in_executor(None, lambda: run_ydl(texto))
+        file_path = ydl_obj.prepare_filename(info)
+
+        # --- Envio com timeout estendido e fallback ---
+        try:
+            with open(file_path, "rb") as f:
+                await update.message.reply_video(
+                    video=f,
+                    caption="✅ Aqui está seu vídeo!",
+                    timeout=180  # até 3 minutos para upload
+                )
+        except Exception as e:
+            # fallback: envia como documento se o Telegram não aceitar como vídeo
+            with open(file_path, "rb") as f:
+                await update.message.reply_document(
+                    document=f,
+                    caption="⚙️ Envio alternativo (arquivo grande)",
+                    timeout=180
+                )
+
         os.remove(file_path)
+        if not is_premium(user_id):
+            incrementar_download(user_id)
+
     except Exception as e:
-        logger.error(f"Erro ao enviar vídeo: {e}")
-        await context.bot.send_message(chat_id, "⚠️ Erro ao enviar o vídeo. Tente novamente.")
+        traceback.print_exc()
+        await update.message.reply_text(f"❌ Erro ao baixar: {e}")
 
 # ==========================================================
 # TELEGRAM HANDLERS
@@ -159,3 +206,4 @@ def home():
 if __name__ == "__main__":
     logger.info("🚀 Iniciando bot Flask + Telegram...")
     app.run(host="0.0.0.0", port=PORT)
+
