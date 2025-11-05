@@ -192,8 +192,15 @@ async def meuid(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 import base64
 
+import base64
+import os
+import yt_dlp
+import aiohttp
+import asyncio
+import traceback
+
 # -----------------------
-# Download de vídeo (corrigido e compatível com cookies IG/Shopee)
+# Download de vídeo (corrigido e compatível com Stories do Instagram)
 # -----------------------
 async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text.strip()
@@ -216,28 +223,27 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 async with s.get(texto, allow_redirects=True) as r:
                     texto = str(r.url)
 
-        # Nome seguro de saída
         safe_id = "".join(c for c in texto if c.isalnum())[-12:]
         out_template = str(DOWNLOADS_DIR / f"{safe_id}.%(ext)s")
 
         ydl_opts = {
             "outtmpl": out_template,
-            "format": "best",
+            "format": "bestvideo+bestaudio/best",
             "quiet": True,
-            "retries": 3
+            "merge_output_format": "mp4",
+            "retries": 3,
+            "noprogress": True,
         }
 
-        # Função para salvar cookies
         def salvar_cookie_env(nome_variavel, arquivo_destino):
             conteudo = os.environ.get(nome_variavel)
             if not conteudo:
                 return None
             try:
-                # tenta decodificar base64
                 decoded = base64.b64decode(conteudo).decode("utf-8")
                 conteudo = decoded
             except Exception:
-                pass  # já está em texto plano
+                pass  # já é texto plano
             conteudo = conteudo.replace("\\n", "\n").replace("\r\n", "\n")
             if not conteudo.startswith("# Netscape"):
                 conteudo = "# Netscape HTTP Cookie File\n" + conteudo
@@ -245,7 +251,6 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f.write(conteudo)
             return arquivo_destino
 
-        # --- Usa cookies conforme o domínio ---
         if "instagram.com" in texto:
             cookie_path = salvar_cookie_env("COOKIES_IG_B64", "cookies_instagram.txt")
             if cookie_path:
@@ -260,7 +265,6 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
             print("[COOKIES] Usando cookies do TikTok.")
 
-        # --- Download ---
         def run_ydl(url):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
@@ -270,24 +274,25 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         info, ydl_obj = await loop.run_in_executor(None, lambda: run_ydl(texto))
         file_path = ydl_obj.prepare_filename(info)
 
-        # Força extensão .mp4 se não detectada
-        if not os.path.splitext(file_path)[1]:
-            file_path += ".mp4"
+        # 🔧 Corrige arquivos sem extensão
+        if not os.path.splitext(file_path)[1] or file_path.endswith(".NA"):
+            possible_mp4 = file_path.replace(".NA", ".mp4")
+            if os.path.exists(possible_mp4):
+                file_path = possible_mp4
+            else:
+                # tenta achar arquivo com mesmo prefixo
+                prefix = os.path.splitext(file_path)[0]
+                for f in os.listdir(DOWNLOADS_DIR):
+                    if f.startswith(os.path.basename(prefix)):
+                        file_path = str(DOWNLOADS_DIR / f)
+                        break
 
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Arquivo não encontrado após o download: {file_path}")
 
         print(f"[baixar_video] Enviando arquivo {file_path} para {user_id}")
         with open(file_path, "rb") as f:
-            await update.message.reply_video(f, caption="✅ Aqui está seu vídeo!")
-
-        os.remove(file_path)
-        if not is_premium(user_id):
-            incrementar_download(user_id)
-
-    except Exception as e:
-        traceback.print_exc()
-        await update.message.reply_text(f"Erro ao baixar: {e}")
+            await update.message.reply_video(_
 
 
 
@@ -333,5 +338,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
