@@ -1,15 +1,16 @@
-# Bot completo atualizado para Webhook (Render) — Jet_TikTokShop
-# Inclui correção do webhook (process_update), sem polling
+# Bot completo 100% Webhook (Render) — SEM POLLING — FUNCIONAL
+# Inclui correção do process_update, app global, webhook correto e nenhuma dependência de update_queue
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, BotCommand
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
-import yt_dlp, os, json, aiohttp
+import yt_dlp, os, json, aiohttp, asyncio, traceback
 from datetime import datetime, date
-from pathlib import Path
-import asyncio, traceback
 from flask import Flask, request
-import threading
+from pathlib import Path
 
+# -----------------------------------------------------
+# CONFIGURAÇÕES
+# -----------------------------------------------------
 TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = 5593153639
 LIMITE_DIARIO = 10
@@ -25,143 +26,140 @@ DOWNLOADS_DIR = SCRIPT_DIR / "downloads"
 DOWNLOADS_DIR.mkdir(exist_ok=True)
 
 COOKIES_TIKTOK = SCRIPT_DIR / "cookies.txt"
-
 if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
     with open(COOKIES_TIKTOK, "w") as f:
         f.write(os.environ["COOKIES_TIKTOK"])
 
-# -----------------------------
+# -----------------------------------------------------
 # JSON HELPERS
-# -----------------------------
+# -----------------------------------------------------
 
-def carregar_json(caminho):
-    if os.path.exists(caminho):
-        with open(caminho, "r") as f:
+def carregar_json(path):
+    if os.path.exists(path):
+        with open(path, "r") as f:
             return json.load(f)
     return {}
 
 
-def salvar_json(caminho, dados):
-    with open(caminho, "w") as f:
-        json.dump(dados, f)
+def salvar_json(path, data):
+    with open(path, "w") as f:
+        json.dump(data, f)
 
-# -----------------------------
+# -----------------------------------------------------
 # PREMIUM SYSTEM
-# -----------------------------
+# -----------------------------------------------------
 
 def carregar_premium():
-    dados = carregar_json(ARQUIVO_PREMIUM)
-    return set(map(int, dados.get("premium_users", [])))
+    data = carregar_json(ARQUIVO_PREMIUM)
+    return set(map(int, data.get("premium_users", [])))
 
 
-def salvar_premium(usuarios):
-    salvar_json(ARQUIVO_PREMIUM, {"premium_users": list(usuarios)})
+def salvar_premium(users):
+    salvar_json(ARQUIVO_PREMIUM, {"premium_users": list(users)})
 
 
 USUARIOS_PREMIUM = carregar_premium()
-
-ID_PREMIUM_1 = 5593153639
-ID_PREMIUM_2 = 0
-ID_PREMIUM_3 = 0
-ID_PREMIUM_4 = 0
-
-USUARIOS_PREMIUM.update({ID_PREMIUM_1, ID_PREMIUM_2, ID_PREMIUM_3, ID_PREMIUM_4})
+USUARIOS_PREMIUM.update({5593153639, 0, 0, 0})
 salvar_premium(USUARIOS_PREMIUM)
 
-# -----------------------------
+# -----------------------------------------------------
 # LIMITES DIÁRIOS
-# -----------------------------
+# -----------------------------------------------------
 
-def verificar_limite(user_id):
-    dados = carregar_json(ARQUIVO_CONTADOR)
+def verificar_limite(uid):
+    data = carregar_json(ARQUIVO_CONTADOR)
     hoje = str(date.today())
-    if str(user_id) not in dados or dados[str(user_id)]["data"] != hoje:
-        dados[str(user_id)] = {"data": hoje, "downloads": 0}
-        salvar_json(ARQUIVO_CONTADOR, dados)
-    return dados[str(user_id)]["downloads"]
+
+    if str(uid) not in data or data[str(uid)]["data"] != hoje:
+        data[str(uid)] = {"data": hoje, "downloads": 0}
+        salvar_json(ARQUIVO_CONTADOR, data)
+
+    return data[str(uid)]["downloads"]
 
 
-def incrementar_download(user_id):
-    dados = carregar_json(ARQUIVO_CONTADOR)
+def incrementar_download(uid):
+    data = carregar_json(ARQUIVO_CONTADOR)
     hoje = str(date.today())
-    if str(user_id) not in dados or dados[str(user_id)]["data"] != hoje:
-        dados[str(user_id)] = {"data": hoje, "downloads": 1}
+
+    if str(uid) not in data or data[str(uid)]["data"] != hoje:
+        data[str(uid)] = {"data": hoje, "downloads": 1}
     else:
-        dados[str(user_id)]["downloads"] += 1
-    salvar_json(ARQUIVO_CONTADOR, dados)
-    return dados[str(user_id)]["downloads"]
+        data[str(uid)]["downloads"] += 1
 
-# -----------------------------
-# COMANDOS DO BOT
-# -----------------------------
+    salvar_json(ARQUIVO_CONTADOR, data)
+    return data[str(uid)]["downloads"]
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# -----------------------------------------------------
+# BOT TELEGRAM (GLOBAL — NECESSÁRIO PARA WEBHOOK)
+# -----------------------------------------------------
+telegram_app = ApplicationBuilder().token(TOKEN).build()
+
+# -----------------------------------------------------
+# COMANDOS
+# -----------------------------------------------------
+
+async def start(update: Update, context):
     msg = (
-        "🎬 *Bem-vindo(a) ao Jet TikTokShop Bot!*
-
-"
-        "👉 Envie o link do vídeo que deseja baixar.
-"
-        "⚠️ Free: até *10 vídeos/dia*
-"
-        "💎 Premium: downloads ilimitados."
+        "🎬 *Bem-vindo ao Jet TikTokShop Bot!*\n\n"
+        "👉 Envie o link do vídeo que deseja baixar.\n"
+        "⚠️ Free: *10 vídeos por dia*\n"
+        "💎 Premium: ilimitado"
     )
     await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=ReplyKeyboardRemove())
 
 
-async def planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    planos_list = [
-        {"descricao": "1 Mês", "valor": 9.90, "url": "https://www.asaas.com/c/knu5vub6ejc2yyja"},
-        {"descricao": "3 Meses", "valor": 25.90, "url": "https://www.asaas.com/c/o9pg4uxrpgwnmqzd"},
-        {"descricao": "1 Ano", "valor": 89.90, "url": "https://www.asaas.com/c/puto9coszhwgprqc"}
+async def planos(update: Update, context):
+    planos = [
+        ("1 Mês", 9.90, "https://www.asaas.com/c/knu5vub6ejc2yyja"),
+        ("3 Meses", 25.90, "https://www.asaas.com/c/o9pg4uxrpgwnmqzd"),
+        ("1 Ano", 89.90, "https://www.asaas.com/c/puto9coszhwgprqc"),
     ]
 
-    buttons = [[InlineKeyboardButton(f"💎 {p['descricao']} - R$ {p['valor']}", url=p['url'])] for p in planos_list]
-    await update.message.reply_text("Selecione seu plano Premium:", reply_markup=InlineKeyboardMarkup(buttons))
+    kb = [[InlineKeyboardButton(f"💎 {desc} - R$ {price}", url=url)] for desc, price, url in planos]
+    await update.message.reply_text("Escolha seu plano:", reply_markup=InlineKeyboardMarkup(kb))
 
 
-async def duvida(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📞 Contato: lavimurtha@gmail.com")
+async def duvida(update: Update, context):
+    await update.message.reply_text("📞 E-mail: lavimurtha@gmail.com")
 
 
-async def meuid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def meuid(update: Update, context):
     await update.message.reply_text(f"🆔 Seu ID: {update.message.from_user.id}")
 
-# -----------------------------
-# SISTEMA DE DOWNLOAD
-# -----------------------------
+# -----------------------------------------------------
+# DOWNLOAD
+# -----------------------------------------------------
 
-async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def baixar_video(update: Update, context):
     texto = update.message.text.strip()
-    user_id = update.message.from_user.id
+    uid = update.message.from_user.id
 
     if not texto.startswith("http"):
         return await update.message.reply_text("❌ Envie um link válido.")
 
-    if user_id not in USUARIOS_PREMIUM:
-        usados = verificar_limite(user_id)
-        if usados >= LIMITE_DIARIO:
-            return await update.message.reply_text("⚠️ Limite diário atingido. Assine Premium!")
+    if uid not in USUARIOS_PREMIUM:
+        usos = verificar_limite(uid)
+        if usos >= LIMITE_DIARIO:
+            return await update.message.reply_text("⚠️ Limite diário atingido. Torne-se Premium!")
 
     await update.message.reply_text("⏳ Baixando...")
 
     try:
         if "pin.it/" in texto:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(texto, allow_redirects=True) as resp:
-                    texto = str(resp.url)
+            async with aiohttp.ClientSession() as s:
+                async with s.get(texto, allow_redirects=True) as r:
+                    texto = str(r.url)
 
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        out_template = str(DOWNLOADS_DIR / f"%(id)s-{timestamp}.%(ext)s")
+        outtmpl = str(DOWNLOADS_DIR / f"%(id)s-{timestamp}.%(ext)s")
 
         ydl_opts = {
-            "outtmpl": out_template,
+            "outtmpl": outtmpl,
             "format": "bestvideo+bestaudio/best",
             "merge_output_format": "mp4",
             "noplaylist": True,
-            "nocheckcertificate": True,
             "retries": 3,
-            "no_warnings": True
+            "no_warnings": True,
         }
 
         if COOKIES_TIKTOK.exists():
@@ -178,45 +176,54 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             arquivo = ydl_obj.prepare_filename(info)
         except:
-            arquivos = sorted(DOWNLOADS_DIR.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True)
-            arquivo = str(arquivos[0]) if arquivos else None
+            files = sorted(DOWNLOADS_DIR.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True)
+            arquivo = str(files[0]) if files else None
 
         if not arquivo or not os.path.exists(arquivo):
-            return await update.message.reply_text("⚠️ Falha ao localizar vídeo.")
+            return await update.message.reply_text("❌ Falha ao baixar o vídeo.")
 
-        tam = os.path.getsize(arquivo) / 1024 / 1024
+        size_mb = os.path.getsize(arquivo) / 1024 / 1024
 
         with open(arquivo, "rb") as f:
-            if tam > 50:
-                await update.message.reply_document(f, caption="✅ Enviado como documento.")
+            if size_mb > 50:
+                await update.message.reply_document(f, caption="✅ Vídeo enviado (documento)")
             else:
-                await update.message.reply_video(f, caption="✅ Aqui está seu vídeo!")
+                await update.message.reply_video(f, caption="✅ Vídeo em alta qualidade!")
 
         os.remove(arquivo)
 
-        if user_id not in USUARIOS_PREMIUM:
-            novos = incrementar_download(user_id)
-            await update.message.reply_text(f"📊 Uso: {novos}/{LIMITE_DIARIO}")
+        if uid not in USUARIOS_PREMIUM:
+            usos = incrementar_download(uid)
+            await update.message.reply_text(f"📊 Uso: {usos}/{LIMITE_DIARIO}")
 
     except Exception as e:
         await update.message.reply_text(f"❌ Erro: {e}")
         print(traceback.format_exc())
 
-# -----------------------------
+# -----------------------------------------------------
 # ADMIN
-# -----------------------------
+# -----------------------------------------------------
 
-async def premiumadd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def premiumadd(update, context):
     if update.message.from_user.id != ADMIN_ID or not context.args:
         return
     uid = int(context.args[0])
     USUARIOS_PREMIUM.add(uid)
     salvar_premium(USUARIOS_PREMIUM)
-    await update.message.reply_text(f"✅ {uid} virou Premium")
+    await update.message.reply_text(f"✅ {uid} agora é Premium")
 
 
-async def premiumdel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def premiumdel(update, context):
     if update.message.from_user.id != ADMIN_ID or not context.args:
         return
     uid = int(context.args[0])
     if uid in USUARIOS_PREMIUM:
+        USUARIOS_PREMIUM.remove(uid)
+        salvar_premium(USUARIOS_PREMIUM)
+    await update.message.reply_text(f"🗑️ {uid} removido do Premium")
+
+
+async def premiumlist(update, context):
+    if update.message.from_user.id != ADMIN_ID:
+        return
+    lista = "\n".join(str(u)
