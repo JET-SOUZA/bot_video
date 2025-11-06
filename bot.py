@@ -1,28 +1,23 @@
-# Jet_TikTokShop Bot v5.0 - Webhook Render (Flask + PTB20)
-# Downloads + Premium Asaas + Limite Diário + TikTok cookies
-# Compatível com Render (sem polling) – domínio confirmado: bot-video-mgli.onrender.com
+# Bot convertido para Webhook (Render) - Jet_TikTokShop
+# Esta versão remove TODA lógica de polling e usa SOMENTE WEBHOOK
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, BotCommand
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 import yt_dlp, os, json, aiohttp
 from datetime import datetime, date
 from pathlib import Path
-import asyncio, traceback, threading
-
+import asyncio, traceback
 from flask import Flask, request
+import threading
 
 # -----------------------
 # Configurações
 # -----------------------
 TOKEN = os.environ.get("BOT_TOKEN")
-if not TOKEN:
-    raise RuntimeError("Defina a variável de ambiente BOT_TOKEN no Render.")
-
-BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://bot-video-mgli.onrender.com")  # pode sobrescrever em env
 ADMIN_ID = 5593153639
 LIMITE_DIARIO = 10
 
-ASAAS_API_KEY = os.environ.get("ASAAS_API_KEY")  # opcional (usamos só para webhook por enquanto)
+ASAAS_API_KEY = os.environ.get("ASAAS_API_KEY")
 ASAAS_BASE_URL = "https://www.asaas.com/api/v3"
 
 ARQUIVO_CONTADOR = "downloads.json"
@@ -33,21 +28,21 @@ DOWNLOADS_DIR = SCRIPT_DIR / "downloads"
 DOWNLOADS_DIR.mkdir(exist_ok=True)
 
 COOKIES_TIKTOK = SCRIPT_DIR / "cookies.txt"
+
 if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
     with open(COOKIES_TIKTOK, "w") as f:
         f.write(os.environ["COOKIES_TIKTOK"])
 
 # -----------------------
-# Util JSON
+# Funções JSON
 # -----------------------
+
 def carregar_json(caminho):
     if os.path.exists(caminho):
-        try:
-            with open(caminho, "r") as f:
-                return json.load(f)
-        except Exception:
-            return {}
+        with open(caminho, "r") as f:
+            return json.load(f)
     return {}
+
 
 def salvar_json(caminho, dados):
     with open(caminho, "w") as f:
@@ -56,12 +51,15 @@ def salvar_json(caminho, dados):
 # -----------------------
 # Premium
 # -----------------------
+
 def carregar_premium():
     dados = carregar_json(ARQUIVO_PREMIUM)
     return set(map(int, dados.get("premium_users", [])))
 
+
 def salvar_premium(usuarios):
     salvar_json(ARQUIVO_PREMIUM, {"premium_users": list(usuarios)})
+
 
 USUARIOS_PREMIUM = carregar_premium()
 
@@ -77,82 +75,87 @@ salvar_premium(USUARIOS_PREMIUM)
 # -----------------------
 # Limite diário
 # -----------------------
+
 def verificar_limite(user_id):
     dados = carregar_json(ARQUIVO_CONTADOR)
     hoje = str(date.today())
-    if str(user_id) not in dados or dados[str(user_id)].get("data") != hoje:
+    if str(user_id) not in dados or dados[str(user_id)]["data"] != hoje:
         dados[str(user_id)] = {"data": hoje, "downloads": 0}
         salvar_json(ARQUIVO_CONTADOR, dados)
     return dados[str(user_id)]["downloads"]
 
+
 def incrementar_download(user_id):
     dados = carregar_json(ARQUIVO_CONTADOR)
     hoje = str(date.today())
-    if str(user_id) not in dados or dados[str(user_id)].get("data") != hoje:
+
+    if str(user_id) not in dados or dados[str(user_id)]["data"] != hoje:
         dados[str(user_id)] = {"data": hoje, "downloads": 1}
     else:
         dados[str(user_id)]["downloads"] += 1
+
     salvar_json(ARQUIVO_CONTADOR, dados)
     return dados[str(user_id)]["downloads"]
 
 # -----------------------
-# Handlers do bot
+# Comandos do BOT
 # -----------------------
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mensagem = (
         "🎬 *Bem-vindo(a) ao bot Jet_TikTokShop!*\n\n"
         "👉 Envie o link do vídeo que deseja baixar.\n"
-        f"⚠️ Usuário Free: até *{LIMITE_DIARIO} vídeos/dia*\n"
+        "⚠️ Usuário Free: até *10 vídeos/dia*\n"
         "💎 Premium: downloads ilimitados.\n\n"
-        "✨ Use o botão de menu (📎 ➜ /) para ver os comandos disponíveis."
+        "✨ Use o menu (📎 ➜ /) para comandos."
     )
     await update.message.reply_text(mensagem, parse_mode="Markdown", reply_markup=ReplyKeyboardRemove())
+
 
 async def planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     planos_disponiveis = [
         {"descricao": "1 Mês", "valor": 9.90, "url": "https://www.asaas.com/c/knu5vub6ejc2yyja"},
         {"descricao": "3 Meses", "valor": 25.90, "url": "https://www.asaas.com/c/o9pg4uxrpgwnmqzd"},
-        {"descricao": "1 Ano", "valor": 89.90, "url": "https://www.asaas.com/c/puto9coszhwgprqc"},
+        {"descricao": "1 Ano", "valor": 89.90, "url": "https://www.asaas.com/c/puto9coszhwgprqc"}
     ]
+
     keyboard = [[InlineKeyboardButton(f"💎 {p['descricao']} - R$ {p['valor']}", url=p['url'])] for p in planos_disponiveis]
+    markup = InlineKeyboardMarkup(keyboard)
+
     await update.message.reply_text(
-        "💎 Escolha seu plano Premium para liberar downloads ilimitados:\n\n"
-        "📌 Clique no botão para pagar via PIX ou cartão.",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        "💎 Escolha seu plano Premium:\nClique no botão para pagar via PIX ou cartão.",
+        reply_markup=markup
     )
 
+
 async def duvida(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📞 Contato: lavimurtha@gmail.com", parse_mode="Markdown")
+    await update.message.reply_text("📞 Contato: lavimurtha@gmail.com")
+
 
 async def meuid(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    await update.message.reply_text(f"🆔 Seu Telegram ID é: `{user_id}`", parse_mode="Markdown")
+    uid = update.message.from_user.id
+    await update.message.reply_text(f"🆔 Seu ID: {uid}")
 
 # -----------------------
-# Download de vídeo
+# Download
 # -----------------------
+
 async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text:
-        return
-
     texto = update.message.text.strip()
     user_id = update.message.from_user.id
 
     if not texto.startswith("http"):
-        await update.message.reply_text("❌ Envie um link válido de vídeo.")
-        return
+        return await update.message.reply_text("❌ Envie um link válido.")
 
     if user_id not in USUARIOS_PREMIUM:
         usados = verificar_limite(user_id)
         if usados >= LIMITE_DIARIO:
-            await update.message.reply_text("⚠️ Você atingiu seu limite diário de downloads. Assine o Premium para uso ilimitado!")
-            return
+            return await update.message.reply_text("⚠️ Limite diário atingido. Assine Premium!")
 
-    await update.message.reply_text("⏳ Preparando download...", parse_mode="Markdown")
+    await update.message.reply_text("⏳ Baixando...")
 
     try:
-        # Resolver encurtadores/redirects (Pinterest, Shopee etc.)
-        if any(dom in texto for dom in ["pin.it/", "shopee.com", "sv.shopee.com", "universal-link?"]):
+        if "pin.it/" in texto:
             async with aiohttp.ClientSession() as session:
                 async with session.get(texto, allow_redirects=True) as resp:
                     texto = str(resp.url)
@@ -165,17 +168,13 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "format": "bestvideo+bestaudio/best",
             "merge_output_format": "mp4",
             "noplaylist": True,
-            "ignoreerrors": True,
-            "geo_bypass": True,
             "nocheckcertificate": True,
             "retries": 3,
-            "no_warnings": True,
+            "no_warnings": True
         }
 
         if COOKIES_TIKTOK.exists():
             ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
-        if "CHROME_BIN" in os.environ:
-            ydl_opts["browser_executable"] = os.environ["CHROME_BIN"]
 
         def run_ydl(url):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -186,127 +185,85 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         info, ydl_obj = await loop.run_in_executor(None, lambda: run_ydl(texto))
 
         try:
-            candidato = ydl_obj.prepare_filename(info)
-        except Exception:
+            arquivo = ydl_obj.prepare_filename(info)
+        except:
             arquivos = sorted(DOWNLOADS_DIR.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True)
-            candidato = str(arquivos[0]) if arquivos else None
+            arquivo = str(arquivos[0]) if arquivos else None
 
-        if not candidato or not os.path.exists(candidato):
-            await update.message.reply_text("⚠️ Não foi possível localizar o arquivo baixado.")
-            return
+        if not arquivo or not os.path.exists(arquivo):
+            return await update.message.reply_text("⚠️ Falha ao localizar vídeo.")
 
-        tamanho_mb = os.path.getsize(candidato) / 1024 / 1024
-        with open(candidato, "rb") as f:
-            if tamanho_mb > 50:
-                await update.message.reply_document(f, caption="✅ Aqui está seu vídeo (documento).")
+        tam = os.path.getsize(arquivo) / 1024 / 1024
+
+        with open(arquivo, "rb") as f:
+            if tam > 50:
+                await update.message.reply_document(f, caption="✅ Vídeo (enviado como documento)")
             else:
-                await update.message.reply_video(f, caption="✅ Aqui está seu vídeo em alta qualidade!")
+                await update.message.reply_video(f, caption="✅ Vídeo em alta qualidade!")
 
-        os.remove(candidato)
+        os.remove(arquivo)
 
         if user_id not in USUARIOS_PREMIUM:
-            novos_usos = incrementar_download(user_id)
-            await update.message.reply_text(f"📊 Uso diário: *{novos_usos}/{LIMITE_DIARIO}*", parse_mode="Markdown")
+            novos = incrementar_download(user_id)
+            await update.message.reply_text(f"📊 Uso diário: {novos}/{LIMITE_DIARIO}")
 
     except Exception as e:
-        tb = traceback.format_exc()
-        await update.message.reply_text(f"❌ Erro ao baixar: {e}")
-        print(tb)
+        await update.message.reply_text(f"❌ Erro: {e}")
+        print(traceback.format_exc())
 
 # -----------------------
 # Admin
 # -----------------------
+
 async def premiumadd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID or not context.args:
+    if update.message.from_user.id != ADMIN_ID:
         return
-    user_id = int(context.args[0])
-    USUARIOS_PREMIUM.add(user_id)
+    if not context.args:
+        return
+    uid = int(context.args[0])
+    USUARIOS_PREMIUM.add(uid)
     salvar_premium(USUARIOS_PREMIUM)
-    await update.message.reply_text(f"✅ Usuário {user_id} adicionado como Premium.")
+    await update.message.reply_text(f"✅ {uid} virou Premium")
+
 
 async def premiumdel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID or not context.args:
+    if update.message.from_user.id != ADMIN_ID:
         return
-    user_id = int(context.args[0])
-    if user_id in USUARIOS_PREMIUM:
-        USUARIOS_PREMIUM.remove(user_id)
+    if not context.args:
+        return
+    uid = int(context.args[0])
+    if uid in USUARIOS_PREMIUM:
+        USUARIOS_PREMIUM.remove(uid)
         salvar_premium(USUARIOS_PREMIUM)
-        await update.message.reply_text(f"🗑️ Usuário {user_id} removido do Premium.")
+    await update.message.reply_text(f"🗑️ {uid} removido")
+
 
 async def premiumlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
         return
-    lista = "\n".join(f"• {uid}" for uid in sorted(USUARIOS_PREMIUM))
-    await update.message.reply_text(f"💎 Usuários Premium:\n{lista or '— vazio —'}")
+    lista = "\n".join(str(x) for x in USUARIOS_PREMIUM)
+    await update.message.reply_text(f"💎 Premium:\n{lista}")
 
 # -----------------------
-# App Telegram (PTB) – inicialização assíncrona
+# Flask Webhook
 # -----------------------
-tg_app = None  # Application (PTB)
-tg_loop = None # event loop do PTB em thread separada
 
-async def _build_and_start_tg_app():
-    global tg_app
-    tg_app = ApplicationBuilder().token(TOKEN).build()
-
-    # Comandos principais
-    tg_app.add_handler(CommandHandler("start", start))
-    tg_app.add_handler(CommandHandler("planos", planos))
-    tg_app.add_handler(CommandHandler("duvida", duvida))
-    tg_app.add_handler(CommandHandler("meuid", meuid))
-
-    # Admin
-    tg_app.add_handler(CommandHandler("premiumadd", premiumadd))
-    tg_app.add_handler(CommandHandler("premiumdel", premiumdel))
-    tg_app.add_handler(CommandHandler("premiumlist", premiumlist))
-
-    # Mensagens de links
-    tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
-
-    await tg_app.initialize()
-    await tg_app.bot.set_my_commands([
-        BotCommand("start", "Iniciar o bot"),
-        BotCommand("planos", "Ver planos Premium"),
-        BotCommand("duvida", "Ajuda e contato"),
-        BotCommand("meuid", "Ver seu ID do Telegram"),
-    ])
-
-    # Garante que não há webhook antigo e define o novo
-    await tg_app.bot.delete_webhook(drop_pending_updates=True)
-    await tg_app.bot.set_webhook(url=f"{BASE_URL}/{TOKEN}")
-
-    await tg_app.start()  # inicia processamento da fila update_queue
-    # NÃO chamamos .run_* nem .updater/polling
-
-def start_tg_thread():
-    """Sobe um loop asyncio dedicado para o PTB em thread separada."""
-    def runner():
-        global tg_loop
-        tg_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(tg_loop)
-        tg_loop.run_until_complete(_build_and_start_tg_app())
-        tg_loop.run_forever()
-
-    t = threading.Thread(target=runner, daemon=True)
-    t.start()
-
-# -----------------------
-# Flask (HTTP) – endpoints
-# -----------------------
 flask_app = Flask(__name__)
 
-@flask_app.get("/health")
+
+@flask_app.route("/health", methods=["GET"])
 def health():
     return "OK", 200
 
-@flask_app.post("/webhook_asaas")
+
+@flask_app.route("/webhook_asaas", methods=["POST"])
 def webhook_asaas():
-    data = request.json or {}
+    data = request.json
     status = data.get("status")
-    telegram_id = int((data.get("metadata") or {}).get("telegram_id") or 0)
+    telegram_id = int(data.get("metadata",{}).get("telegram_id",0))
 
     if telegram_id == 0:
-        return "No telegram ID", 400
+        return "NO ID", 400
 
     if status == "CONFIRMED":
         USUARIOS_PREMIUM.add(telegram_id)
@@ -318,33 +275,50 @@ def webhook_asaas():
 
     return "OK", 200
 
-@flask_app.post(f"/{TOKEN}")
+
+@flask_app.route("/webhook_telegram", methods=["POST"])
 def webhook_telegram():
-    # Recebe update do Telegram e joga na fila do PTB
-    if tg_app is None:
-        return "App not ready", 503
-    try:
-        update = Update.de_json(request.get_json(force=True), tg_app.bot)
-        tg_app.update_queue.put_nowait(update)
-    except Exception as e:
-        print("Erro no webhook_telegram:", e)
-        return "Bad Request", 400
+    update = Update.de_json(request.get_json(force=True), app.bot)
+    app.update_queue.put(update)
     return "OK", 200
 
 # -----------------------
-# Entry point Render / Gunicorn
+# INICIALIZAÇÃO (WEBHOOK)
 # -----------------------
-def create_app():
-    """
-    Ponto de entrada para Gunicorn: gunicorn 'bot:create_app()'
-    Sobe thread do PTB e devolve a app Flask.
-    """
-    # Sobe o Telegram (PTB) em thread separada UMA ÚNICA VEZ
-    start_tg_thread()
-    return flask_app
 
-# Execução local (opcional)
+def main():
+    global app
+
+    async def comandos_post_init(app):
+        await app.bot.set_my_commands([
+            BotCommand("start", "Iniciar"),
+            BotCommand("planos", "Planos Premium"),
+            BotCommand("duvida", "Ajuda"),
+            BotCommand("meuid", "Seu ID"),
+        ])
+
+    app = ApplicationBuilder().token(TOKEN).post_init(comandos_post_init).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("planos", planos))
+    app.add_handler(CommandHandler("duvida", duvida))
+    app.add_handler(CommandHandler("meuid", meuid))
+
+    app.add_handler(CommandHandler("premiumadd", premiumadd))
+    app.add_handler(CommandHandler("premiumdel", premiumdel))
+    app.add_handler(CommandHandler("premiumlist", premiumlist))
+
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
+
+    threading.Thread(target=lambda: flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000))), daemon=True).start()
+
+    # ✅ MODO WEBHOOK (SEM POLLING)
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=int(os.environ.get("PORT", 5000)),
+        webhook_url=os.environ.get("WEBHOOK_URL")
+    )
+
+
 if __name__ == "__main__":
-    start_tg_thread()
-    port = int(os.environ.get("PORT", 5000))
-    flask_app.run(host="0.0.0.0", port=port)
+    main()
