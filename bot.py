@@ -1,7 +1,5 @@
-# ============================== 
-# Jet_TikTokShop Bot v4.5
-# Downloads + Premium Dinâmico via Asaas + Ver ID (menu) + TikTok com cookies
-# ==============================
+# Jet_TikTokShop Bot v4.5 - Adaptado para Render
+# Downloads + Premium Dinâmico via Asaas + Ver ID + TikTok com cookies
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, BotCommand
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
@@ -15,11 +13,11 @@ import threading
 # -----------------------
 # Configurações
 # -----------------------
-TOKEN = "8249697837:AAGfvejL5PT9w8sSPMZnIwErh0jX-XMpAPE"
+TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = 5593153639
 LIMITE_DIARIO = 10
 
-ASAAS_API_KEY = "$aact_prod_000MzkwODA2MWY2OGM3MWRlMDU2NWM3MzJlNzZmNGZhZGY6OjQxNTY4M2IzLTU1M2UtNGEyNS05ODQ5LTUzM2Q1OTBiYzdiZTo6JGFhY2hfNGU1ZmE3OGEtMzliNS00OTZlLWFmMGMtNDMzN2VlMzM1Yjlh"
+ASAAS_API_KEY = os.environ.get("ASAAS_API_KEY")
 ASAAS_BASE_URL = "https://www.asaas.com/api/v3"
 
 ARQUIVO_CONTADOR = "downloads.json"
@@ -29,8 +27,11 @@ SCRIPT_DIR = Path(__file__).parent.resolve()
 DOWNLOADS_DIR = SCRIPT_DIR / "downloads"
 DOWNLOADS_DIR.mkdir(exist_ok=True)
 
-# Caminho do arquivo de cookies do TikTok
 COOKIES_TIKTOK = SCRIPT_DIR / "cookies.txt"
+
+if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
+    with open(COOKIES_TIKTOK, "w") as f:
+        f.write(os.environ["COOKIES_TIKTOK"])
 
 # -----------------------
 # Funções JSON
@@ -95,30 +96,29 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎬 *Bem-vindo(a) ao bot Jet_TikTokShop!*\n\n"
         "👉 Envie o link do vídeo que deseja baixar.\n"
         "⚠️ Usuário Free: até *10 vídeos/dia*\n"
-        "💎 Premium: downloads ilimitados (R$ 9,90/mês).\n\n"
+        "💎 Premium: downloads ilimitados.\n\n"
         "✨ Use o botão de menu (📎 ➜ /) para ver os comandos disponíveis."
     )
     await update.message.reply_text(mensagem, parse_mode="Markdown", reply_markup=ReplyKeyboardRemove())
 
+# -----------------------
+# Planos Premium - 3 opções (com links fixos)
+# -----------------------
 async def planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    async with aiohttp.ClientSession() as session:
-        payload = {
-            "customer": "CUS_ID_DO_CLIENTE",
-            "billingType": "PIX",
-            "value": 9.90,
-            "dueDate": datetime.now().strftime("%Y-%m-%d"),
-            "description": "Assinatura Premium Jet_TikTokShop",
-            "metadata": {"telegram_id": user_id}
-        }
-        headers = {"access_token": ASAAS_API_KEY, "Content-Type": "application/json"}
-        async with session.post(f"{ASAAS_BASE_URL}/payments", json=payload, headers=headers) as resp:
-            data = await resp.json()
-            link_pagamento = data.get("pixQrCode") or data.get("paymentLink") or "https://www.asaas.com"
+    # Links fixos dos planos
+    planos_disponiveis = [
+        {"descricao": "1 Mês", "valor": 9.90, "url": "https://www.asaas.com/c/knu5vub6ejc2yyja"},
+        {"descricao": "3 Meses", "valor": 25.90, "url": "https://www.asaas.com/c/o9pg4uxrpgwnmqzd"},
+        {"descricao": "1 Ano", "valor": 89.90, "url": "https://www.asaas.com/c/puto9coszhwgprqc"}
+    ]
 
-    keyboard = [[InlineKeyboardButton("💰 Pagar Premium", url=link_pagamento)]]
+    keyboard = [[InlineKeyboardButton(f"💎 {plano['descricao']} - R$ {plano['valor']}", url=plano['url'])] for plano in planos_disponiveis]
     markup = InlineKeyboardMarkup(keyboard)
-    texto = "💎 Clique no botão abaixo para pagar a assinatura Premium e liberar downloads ilimitados."
+
+    texto = (
+        "💎 Escolha seu plano Premium para liberar downloads ilimitados:\n\n"
+        "📌 Clique no botão para pagar via PIX ou cartão."
+    )
     await update.message.reply_text(texto, reply_markup=markup)
 
 async def duvida(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -148,7 +148,6 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Preparando download...", parse_mode="Markdown")
 
     try:
-        # Resolver links curtos
         if "pin.it/" in texto:
             async with aiohttp.ClientSession() as session:
                 async with session.get(texto, allow_redirects=True) as resp:
@@ -169,9 +168,10 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "no_warnings": True
         }
 
-        # TikTok cookies
         if COOKIES_TIKTOK.exists():
             ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
+        if "CHROME_BIN" in os.environ:
+            ydl_opts["browser_executable"] = os.environ["CHROME_BIN"]
 
         def run_ydl(url):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -236,17 +236,23 @@ async def premiumlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"💎 Usuários Premium:\n{lista}")
 
 # -----------------------
-# Webhook Flask Asaas
+# Webhook Flask
 # -----------------------
 flask_app = Flask(__name__)
+
+@flask_app.route("/health", methods=["GET"])
+def health():
+    return "OK", 200
 
 @flask_app.route("/webhook_asaas", methods=["POST"])
 def webhook_asaas():
     data = request.json
     status = data.get("status")
     telegram_id = int(data.get("metadata", {}).get("telegram_id", 0))
+
     if telegram_id == 0:
         return "No telegram ID", 400
+
     if status == "CONFIRMED":
         USUARIOS_PREMIUM.add(telegram_id)
         salvar_premium(USUARIOS_PREMIUM)
@@ -254,10 +260,19 @@ def webhook_asaas():
         if telegram_id in USUARIOS_PREMIUM:
             USUARIOS_PREMIUM.remove(telegram_id)
             salvar_premium(USUARIOS_PREMIUM)
+
+    return "OK", 200
+
+@flask_app.route("/webhook_telegram", methods=["POST"])
+def webhook_telegram():
+    from telegram import Update
+    update = Update.de_json(request.get_json(force=True), app.bot)
+    app.update_queue.put(update)
     return "OK", 200
 
 def run_flask():
-    flask_app.run(port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    flask_app.run(host="0.0.0.0", port=port)
 
 # -----------------------
 # Inicialização
@@ -273,24 +288,25 @@ def main():
             BotCommand("meuid", "Ver seu ID do Telegram")
         ])
 
-    bot_app = ApplicationBuilder().token(TOKEN).post_init(comandos_post_init).build()
+    global app
+    app = ApplicationBuilder().token(TOKEN).post_init(comandos_post_init).build()
 
     # Comandos principais
-    bot_app.add_handler(CommandHandler("start", start))
-    bot_app.add_handler(CommandHandler("planos", planos))
-    bot_app.add_handler(CommandHandler("duvida", duvida))
-    bot_app.add_handler(CommandHandler("meuid", meuid))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("planos", planos))
+    app.add_handler(CommandHandler("duvida", duvida))
+    app.add_handler(CommandHandler("meuid", meuid))
 
     # Admin
-    bot_app.add_handler(CommandHandler("premiumadd", premiumadd))
-    bot_app.add_handler(CommandHandler("premiumdel", premiumdel))
-    bot_app.add_handler(CommandHandler("premiumlist", premiumlist))
+    app.add_handler(CommandHandler("premiumadd", premiumadd))
+    app.add_handler(CommandHandler("premiumdel", premiumdel))
+    app.add_handler(CommandHandler("premiumlist", premiumlist))
 
     # Mensagens de links
-    bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
 
     print("🤖 Bot iniciado... aguardando mensagens.")
-    bot_app.run_polling()
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
