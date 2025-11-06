@@ -1,229 +1,138 @@
-# Bot completo 100% Webhook (Render) — SEM POLLING — FUNCIONAL
-# Inclui correção do process_update, app global, webhook correto e nenhuma dependência de update_queue
-
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, BotCommand
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
-import yt_dlp, os, json, aiohttp, asyncio, traceback
-from datetime import datetime, date
-from flask import Flask, request
-from pathlib import Path
-
-# -----------------------------------------------------
-# CONFIGURAÇÕES
-# -----------------------------------------------------
-TOKEN = os.environ.get("BOT_TOKEN")
-ADMIN_ID = 5593153639
-LIMITE_DIARIO = 10
-
-ASAAS_API_KEY = os.environ.get("ASAAS_API_KEY")
-ASAAS_BASE_URL = "https://www.asaas.com/api/v3"
-
-ARQUIVO_CONTADOR = "downloads.json"
-ARQUIVO_PREMIUM = "premium.json"
-
-SCRIPT_DIR = Path(__file__).parent.resolve()
-DOWNLOADS_DIR = SCRIPT_DIR / "downloads"
-DOWNLOADS_DIR.mkdir(exist_ok=True)
-
-COOKIES_TIKTOK = SCRIPT_DIR / "cookies.txt"
-if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
-    with open(COOKIES_TIKTOK, "w") as f:
-        f.write(os.environ["COOKIES_TIKTOK"])
-
-# -----------------------------------------------------
-# JSON HELPERS
-# -----------------------------------------------------
-
-def carregar_json(path):
-    if os.path.exists(path):
-        with open(path, "r") as f:
-            return json.load(f)
-    return {}
-
-
-def salvar_json(path, data):
-    with open(path, "w") as f:
-        json.dump(data, f)
-
-# -----------------------------------------------------
-# PREMIUM SYSTEM
-# -----------------------------------------------------
-
-def carregar_premium():
-    data = carregar_json(ARQUIVO_PREMIUM)
-    return set(map(int, data.get("premium_users", [])))
-
-
-def salvar_premium(users):
-    salvar_json(ARQUIVO_PREMIUM, {"premium_users": list(users)})
-
-
-USUARIOS_PREMIUM = carregar_premium()
-USUARIOS_PREMIUM.update({5593153639, 0, 0, 0})
-salvar_premium(USUARIOS_PREMIUM)
-
-# -----------------------------------------------------
-# LIMITES DIÁRIOS
-# -----------------------------------------------------
-
-def verificar_limite(uid):
-    data = carregar_json(ARQUIVO_CONTADOR)
-    hoje = str(date.today())
-
-    if str(uid) not in data or data[str(uid)]["data"] != hoje:
-        data[str(uid)] = {"data": hoje, "downloads": 0}
-        salvar_json(ARQUIVO_CONTADOR, data)
-
-    return data[str(uid)]["downloads"]
-
-
-def incrementar_download(uid):
-    data = carregar_json(ARQUIVO_CONTADOR)
-    hoje = str(date.today())
-
-    if str(uid) not in data or data[str(uid)]["data"] != hoje:
-        data[str(uid)] = {"data": hoje, "downloads": 1}
-    else:
-        data[str(uid)]["downloads"] += 1
-
-    salvar_json(ARQUIVO_CONTADOR, data)
-    return data[str(uid)]["downloads"]
-
-# -----------------------------------------------------
-# BOT TELEGRAM (GLOBAL — NECESSÁRIO PARA WEBHOOK)
-# -----------------------------------------------------
-telegram_app = ApplicationBuilder().token(TOKEN).build()
-
-# -----------------------------------------------------
-# COMANDOS
-# -----------------------------------------------------
-
-async def start(update: Update, context):
-    msg = (
-        "🎬 *Bem-vindo ao Jet TikTokShop Bot!*\n\n"
-        "👉 Envie o link do vídeo que deseja baixar.\n"
-        "⚠️ Free: *10 vídeos por dia*\n"
-        "💎 Premium: ilimitado"
-    )
-    await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=ReplyKeyboardRemove())
-
-
-async def planos(update: Update, context):
-    planos = [
-        ("1 Mês", 9.90, "https://www.asaas.com/c/knu5vub6ejc2yyja"),
-        ("3 Meses", 25.90, "https://www.asaas.com/c/o9pg4uxrpgwnmqzd"),
-        ("1 Ano", 89.90, "https://www.asaas.com/c/puto9coszhwgprqc"),
-    ]
-
-    kb = [[InlineKeyboardButton(f"💎 {desc} - R$ {price}", url=url)] for desc, price, url in planos]
-    await update.message.reply_text("Escolha seu plano:", reply_markup=InlineKeyboardMarkup(kb))
-
-
-async def duvida(update: Update, context):
-    await update.message.reply_text("📞 E-mail: lavimurtha@gmail.com")
-
-
-async def meuid(update: Update, context):
-    await update.message.reply_text(f"🆔 Seu ID: {update.message.from_user.id}")
-
-# -----------------------------------------------------
-# DOWNLOAD
-# -----------------------------------------------------
-
-async def baixar_video(update: Update, context):
-    texto = update.message.text.strip()
-    uid = update.message.from_user.id
-
-    if not texto.startswith("http"):
-        return await update.message.reply_text("❌ Envie um link válido.")
-
-    if uid not in USUARIOS_PREMIUM:
-        usos = verificar_limite(uid)
-        if usos >= LIMITE_DIARIO:
-            return await update.message.reply_text("⚠️ Limite diário atingido. Torne-se Premium!")
-
-    await update.message.reply_text("⏳ Baixando...")
-
-    try:
-        if "pin.it/" in texto:
-            async with aiohttp.ClientSession() as s:
-                async with s.get(texto, allow_redirects=True) as r:
-                    texto = str(r.url)
-
-        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        outtmpl = str(DOWNLOADS_DIR / f"%(id)s-{timestamp}.%(ext)s")
-
-        ydl_opts = {
-            "outtmpl": outtmpl,
-            "format": "bestvideo+bestaudio/best",
-            "merge_output_format": "mp4",
-            "noplaylist": True,
-            "retries": 3,
-            "no_warnings": True,
-        }
-
-        if COOKIES_TIKTOK.exists():
-            ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
-
-        def run_ydl(url):
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                return info, ydl
-
-        loop = asyncio.get_running_loop()
-        info, ydl_obj = await loop.run_in_executor(None, lambda: run_ydl(texto))
-
-        try:
-            arquivo = ydl_obj.prepare_filename(info)
-        except:
-            files = sorted(DOWNLOADS_DIR.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True)
-            arquivo = str(files[0]) if files else None
-
-        if not arquivo or not os.path.exists(arquivo):
-            return await update.message.reply_text("❌ Falha ao baixar o vídeo.")
-
-        size_mb = os.path.getsize(arquivo) / 1024 / 1024
-
-        with open(arquivo, "rb") as f:
-            if size_mb > 50:
-                await update.message.reply_document(f, caption="✅ Vídeo enviado (documento)")
-            else:
-                await update.message.reply_video(f, caption="✅ Vídeo em alta qualidade!")
-
-        os.remove(arquivo)
-
-        if uid not in USUARIOS_PREMIUM:
-            usos = incrementar_download(uid)
-            await update.message.reply_text(f"📊 Uso: {usos}/{LIMITE_DIARIO}")
-
-    except Exception as e:
-        await update.message.reply_text(f"❌ Erro: {e}")
-        print(traceback.format_exc())
-
-# -----------------------------------------------------
-# ADMIN
-# -----------------------------------------------------
-
-async def premiumadd(update, context):
-    if update.message.from_user.id != ADMIN_ID or not context.args:
-        return
-    uid = int(context.args[0])
-    USUARIOS_PREMIUM.add(uid)
-    salvar_premium(USUARIOS_PREMIUM)
-    await update.message.reply_text(f"✅ {uid} agora é Premium")
-
-
-async def premiumdel(update, context):
-    if update.message.from_user.id != ADMIN_ID or not context.args:
-        return
-    uid = int(context.args[0])
-    if uid in USUARIOS_PREMIUM:
-        USUARIOS_PREMIUM.remove(uid)
-        salvar_premium(USUARIOS_PREMIUM)
-    await update.message.reply_text(f"🗑️ {uid} removido do Premium")
-
-
-async def premiumlist(update, context):
-    if update.message.from_user.id != ADMIN_ID:
-        return
+File "/opt/render/project/src/.venv/lib/python3.11/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+         ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/render/project/src/bot.py", line 281, in webhook_telegram
+    update = Update.de_json(request.get_json(force=True), app.bot)
+                                                          ^^^
+NameError: name 'app' is not defined
+127.0.0.1 - - [06/Nov/2025:20:38:25 +0000] "POST /webhook_telegram HTTP/1.1" 500 265 "-" "-"
+[2025-11-06 20:40:15,870] ERROR in app: Exception on /webhook_telegram [POST]
+127.0.0.1 - - [06/Nov/2025:20:40:15 +0000] "POST /webhook_telegram HTTP/1.1" 500 265 "-" "-"
+Traceback (most recent call last):
+  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+         ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/render/project/src/bot.py", line 281, in webhook_telegram
+    update = Update.de_json(request.get_json(force=True), app.bot)
+                                                          ^^^
+NameError: name 'app' is not defined
+     ==> Deploying...
+==> Running 'gunicorn bot:flask_app'
+Traceback (most recent call last):
+  File "/opt/render/project/src/.venv/bin/gunicorn", line 8, in <module>
+    sys.exit(run())
+             ^^^^^
+  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/gunicorn/app/wsgiapp.py", line 66, in run
+    WSGIApplication("%(prog)s [OPTIONS] [APP_MODULE]", prog=prog).run()
+  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/gunicorn/app/base.py", line 235, in run
+    super().run()
+  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/gunicorn/app/base.py", line 71, in run
+    Arbiter(self).run()
+    ^^^^^^^^^^^^^
+  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/gunicorn/arbiter.py", line 57, in __init__
+    self.setup(app)
+  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/gunicorn/arbiter.py", line 117, in setup
+    self.app.wsgi()
+  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/gunicorn/app/base.py", line 66, in wsgi
+    self.callable = self.load()
+                    ^^^^^^^^^^^
+  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/gunicorn/app/wsgiapp.py", line 57, in load
+    return self.load_wsgiapp()
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/gunicorn/app/wsgiapp.py", line 47, in load_wsgiapp
+    return util.import_app(self.app_uri)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/gunicorn/util.py", line 370, in import_app
+    mod = importlib.import_module(module)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/render/project/python/Python-3.11.9/lib/python3.11/importlib/__init__.py", line 126, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 936, in exec_module
+  File "<frozen importlib._bootstrap_external>", line 1074, in get_code
+  File "<frozen importlib._bootstrap_external>", line 1004, in source_to_code
+  File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+  File "/opt/render/project/src/bot.py", line 229
     lista = "\n".join(str(u)
+                     ^
+SyntaxError: '(' was never closed
+     ==> Exited with status 1
+     ==> Common ways to troubleshoot your deploy: https://render.com/docs/troubleshooting-deploys
+[2025-11-06 20:41:42,188] ERROR in app: Exception on /webhook_telegram [POST]
+Traceback (most recent call last):
+  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+         ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/render/project/src/bot.py", line 281, in webhook_telegram
+    update = Update.de_json(request.get_json(force=True), app.bot)
+                                                          ^^^
+NameError: name 'app' is not defined
+127.0.0.1 - - [06/Nov/2025:20:41:42 +0000] "POST /webhook_telegram HTTP/1.1" 500 265 "-" "-"
+==> Running 'gunicorn bot:flask_app'
+Traceback (most recent call last):
+  File "/opt/render/project/src/.venv/bin/gunicorn", line 8, in <module>
+    sys.exit(run())
+             ^^^^^
+  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/gunicorn/app/wsgiapp.py", line 66, in run
+    WSGIApplication("%(prog)s [OPTIONS] [APP_MODULE]", prog=prog).run()
+  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/gunicorn/app/base.py", line 235, in run
+    super().run()
+  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/gunicorn/app/base.py", line 71, in run
+    Arbiter(self).run()
+    ^^^^^^^^^^^^^
+  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/gunicorn/arbiter.py", line 57, in __init__
+    self.setup(app)
+  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/gunicorn/arbiter.py", line 117, in setup
+    self.app.wsgi()
+  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/gunicorn/app/base.py", line 66, in wsgi
+    self.callable = self.load()
+                    ^^^^^^^^^^^
+  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/gunicorn/app/wsgiapp.py", line 57, in load
+    return self.load_wsgiapp()
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/gunicorn/app/wsgiapp.py", line 47, in load_wsgiapp
+    return util.import_app(self.app_uri)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/render/project/src/.venv/lib/python3.11/site-packages/gunicorn/util.py", line 370, in import_app
+    mod = importlib.import_module(module)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/render/project/python/Python-3.11.9/lib/python3.11/importlib/__init__.py", line 126, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 936, in exec_module
+  File "<frozen importlib._bootstrap_external>", line 1074, in get_code
+  File "<frozen importlib._bootstrap_external>", line 1004, in source_to_code
+  File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+  File "/opt/render/project/src/bot.py", line 229
+    lista = "\n".join(str(u)
+                     ^
+SyntaxError: '(' was never closed
