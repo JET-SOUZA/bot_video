@@ -79,8 +79,6 @@ def salvar_premium(users):
 
 
 USUARIOS_PREMIUM = carregar_premium()
-
-# IDs padrões
 USUARIOS_PREMIUM.update({ADMIN_ID, 0, 0, 0})
 salvar_premium(USUARIOS_PREMIUM)
 
@@ -193,7 +191,6 @@ async def baixar_video(update: Update, context):
         loop = asyncio.get_running_loop()
         info, ydl_obj = await loop.run_in_executor(None, lambda: run_ydl(texto))
 
-        # Recuperar arquivo final
         try:
             arquivo = ydl_obj.prepare_filename(info)
         except:
@@ -264,8 +261,8 @@ def health():
 
 @flask_app.route("/webhook_telegram", methods=["POST"])
 def webhook_telegram():
-    update = Update.de_json(request.get_json(force=True), app.bot)
-    asyncio.run(app.process_update(update))
+    update = Update.de_json(request.get_json(force=True), bot_app.bot)
+    asyncio.run(bot_app.process_update(update))
     return "OK", 200
 
 
@@ -278,12 +275,10 @@ def run_flask():
 # MAIN
 # -----------------------------------------------------
 def main():
-    threading.Thread(target=run_flask, daemon=True).start()
+    global bot_app
+    bot_app = ApplicationBuilder().token(TOKEN).build()
 
-    global app
-    app = ApplicationBuilder().token(TOKEN).build()
-
-    # Registrar comandos
+    # Comandos
     async def post_init(app):
         await app.bot.set_my_commands([
             BotCommand("start", "Iniciar bot"),
@@ -291,28 +286,27 @@ def main():
             BotCommand("duvida", "Suporte"),
             BotCommand("meuid", "Seu Telegram ID")
         ])
+    bot_app.post_init = post_init
 
-    app.post_init = post_init
+    bot_app.add_handler(CommandHandler("start", start))
+    bot_app.add_handler(CommandHandler("planos", planos))
+    bot_app.add_handler(CommandHandler("duvida", duvida))
+    bot_app.add_handler(CommandHandler("meuid", meuid))
 
-    # Handlers
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("planos", planos))
-    app.add_handler(CommandHandler("duvida", duvida))
-    app.add_handler(CommandHandler("meuid", meuid))
+    bot_app.add_handler(CommandHandler("premiumadd", premiumadd))
+    bot_app.add_handler(CommandHandler("premiumdel", premiumdel))
+    bot_app.add_handler(CommandHandler("premiumlist", premiumlist))
 
-    app.add_handler(CommandHandler("premiumadd", premiumadd))
-    app.add_handler(CommandHandler("premiumdel", premiumdel))
-    app.add_handler(CommandHandler("premiumlist", premiumlist))
+    bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
 
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
+    # Inicializa bot sem polling/webhook interno
+    asyncio.run(bot_app.initialize())
+    asyncio.run(bot_app.start())
 
-    print("✅ Bot rodando com webhook...")
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=int(os.environ.get("PORT", 5000)),
-        url_path="webhook_telegram",
-        webhook_url=f"{os.environ.get('RENDER_EXTERNAL_URL')}/webhook_telegram"
-    )
+    print("✅ Bot ativo e pronto para receber webhook no Render...")
+
+    # Inicia Flask (webhook)
+    run_flask()
 
 
 if __name__ == "__main__":
