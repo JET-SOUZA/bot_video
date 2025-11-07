@@ -1,4 +1,4 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, BotCommand
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 import yt_dlp, os, json, aiohttp, asyncio, traceback
 from datetime import datetime, date
@@ -23,9 +23,6 @@ DOWNLOADS_DIR = SCRIPT_DIR / "downloads"
 DOWNLOADS_DIR.mkdir(exist_ok=True)
 
 COOKIES_TIKTOK = SCRIPT_DIR / "cookies.txt"
-if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
-    with open(COOKIES_TIKTOK, "w") as f:
-        f.write(os.environ["COOKIES_TIKTOK"])
 
 # -----------------------------------------------------
 # JSON HELPERS
@@ -41,7 +38,7 @@ def salvar_json(path, data):
         json.dump(data, f)
 
 # -----------------------------------------------------
-# PREMIUM SYSTEM
+# PREMIUM
 # -----------------------------------------------------
 def carregar_premium():
     data = carregar_json(ARQUIVO_PREMIUM)
@@ -51,11 +48,11 @@ def salvar_premium(users):
     salvar_json(ARQUIVO_PREMIUM, {"premium_users": list(users)})
 
 USUARIOS_PREMIUM = carregar_premium()
-USUARIOS_PREMIUM.update({5593153639, 0, 0, 0})
+USUARIOS_PREMIUM.update({ADMIN_ID, 0, 0, 0})
 salvar_premium(USUARIOS_PREMIUM)
 
 # -----------------------------------------------------
-# LIMITES DIÁRIOS
+# LIMITES
 # -----------------------------------------------------
 def verificar_limite(uid):
     data = carregar_json(ARQUIVO_CONTADOR)
@@ -80,7 +77,7 @@ def incrementar_download(uid):
     return data[str(uid)]["downloads"]
 
 # -----------------------------------------------------
-# TELEGRAM APP GLOBAL — OBRIGATÓRIO PARA WEBHOOK
+# APP TELEGRAM GLOBAL
 # -----------------------------------------------------
 telegram_app = ApplicationBuilder().token(TOKEN).build()
 
@@ -89,15 +86,18 @@ asyncio.run(telegram_app.initialize())
 asyncio.run(telegram_app.start())
 
 # -----------------------------------------------------
-# COMANDOS DO BOT
+# COMANDOS
 # -----------------------------------------------------
-async def start(update: Update, context):
-   msg = (
-    "🎬 *Bem-vindo ao Jet TikTokShop Bot!*\n\n"
-    "👉 Envie o link do vídeo para baixar.\n"
-    "⚠️ Free: *10 vídeos por dia*\n"
-    "💎 Premium: ilimitado"
-)
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = (
+        "🎬 *Bem-vindo ao Jet TikTokShop Bot!*
+
+"
+        "👉 Envie o link do vídeo para baixar.
+"
+        "⚠️ Free: *10 vídeos por dia*
+"
+        "💎 Premium: ilimitado"
     )
     await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=ReplyKeyboardRemove())
 
@@ -117,7 +117,7 @@ async def meuid(update: Update, context):
     await update.message.reply_text(f"🆔 Seu ID: {update.message.from_user.id}")
 
 # -----------------------------------------------------
-# DOWNLOAD DE VÍDEO
+# DOWNLOAD
 # -----------------------------------------------------
 async def baixar_video(update: Update, context):
     texto = update.message.text.strip()
@@ -205,4 +205,8 @@ async def premiumdel(update, context):
         return
     uid = int(context.args[0])
     if uid in USUARIOS_PREMIUM:
+        USUARIOS_PREMIUM.remove(uid)
+        salvar_premium(USUARIOS_PREMIUM)
+    await update.message.reply_text(f"🗑️ {uid} removido do Premium")
 
+async def premiumlist(update, context):
