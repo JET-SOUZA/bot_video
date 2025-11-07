@@ -91,12 +91,8 @@ asyncio.run(telegram_app.start())
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
     "🎬 *Bem-vindo ao Jet TikTokShop Bot!*\n\n"
-
-"
-    "👉 Envie o link do vídeo para baixar.
-"
-    "⚠️ Free: *10 vídeos por dia*
-"
+    "👉 Envie o link do vídeo para baixar.\n"
+    "⚠️ Free: *10 vídeos por dia*\n"
     "💎 Premium: ilimitado"
 )
         "🎬 *Bem-vindo ao Jet TikTokShop Bot!*
