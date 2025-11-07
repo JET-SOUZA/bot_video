@@ -84,14 +84,22 @@ def incrementar_download(uid):
 # -----------------------------------------------------
 telegram_app = ApplicationBuilder().token(TOKEN).build()
 
+# INICIALIZAÇÃO OBRIGATÓRIA (PTB20+)
+asyncio.run(telegram_app.initialize())
+asyncio.run(telegram_app.start())
+
 # -----------------------------------------------------
 # COMANDOS DO BOT
 # -----------------------------------------------------
 async def start(update: Update, context):
     msg = (
-        "🎬 *Bem-vindo ao Jet TikTokShop Bot!*\n\n"
-        "👉 Envie o link do vídeo para baixar.\n"
-        "⚠️ Free: *10 vídeos por dia*\n"
+        "🎬 *Bem-vindo ao Jet TikTokShop Bot!*
+
+"
+        "👉 Envie o link do vídeo para baixar.
+"
+        "⚠️ Free: *10 vídeos por dia*
+"
         "💎 Premium: ilimitado"
     )
     await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=ReplyKeyboardRemove())
@@ -200,50 +208,3 @@ async def premiumdel(update, context):
         return
     uid = int(context.args[0])
     if uid in USUARIOS_PREMIUM:
-        USUARIOS_PREMIUM.remove(uid)
-        salvar_premium(USUARIOS_PREMIUM)
-    await update.message.reply_text(f"🗑️ {uid} removido do Premium")
-
-async def premiumlist(update, context):
-    if update.message.from_user.id != ADMIN_ID:
-        return
-    lista = "\n".join(str(u) for u in USUARIOS_PREMIUM)
-    await update.message.reply_text(f"💎 Premium Users:\n{lista}")
-
-# -----------------------------------------------------
-# FLASK + WEBHOOK
-# -----------------------------------------------------
-flask_app = Flask(__name__)
-
-@flask_app.route("/health", methods=["GET"])
-def health():
-    return "OK", 200
-
-@flask_app.route("/webhook_telegram", methods=["POST"])
-def webhook_telegram():
-    try:
-        data = request.get_json(force=True)
-        update = Update.de_json(data, telegram_app.bot)
-        asyncio.run(telegram_app.process_update(update))
-    except Exception as e:
-        print("Webhook error:", e)
-    return "OK", 200
-
-# -----------------------------------------------------
-# REGISTRO DOS HANDLERS
-# -----------------------------------------------------
-telegram_app.add_handler(CommandHandler("start", start))
-telegram_app.add_handler(CommandHandler("planos", planos))
-telegram_app.add_handler(CommandHandler("duvida", duvida))
-telegram_app.add_handler(CommandHandler("meuid", meuid))
-
-telegram_app.add_handler(CommandHandler("premiumadd", premiumadd))
-telegram_app.add_handler(CommandHandler("premiumdel", premiumdel))
-telegram_app.add_handler(CommandHandler("premiumlist", premiumlist))
-
-telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
-
-# -----------------------------------------------------
-# PRONTO PARA O RENDER
-# O GUNICORN CARREGA APENAS O FLASK
-# -----------------------------------------------------
