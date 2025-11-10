@@ -45,7 +45,6 @@ DOWNLOADS_DIR = SCRIPT_DIR / "downloads"
 DOWNLOADS_DIR.mkdir(exist_ok=True)
 
 COOKIES_TIKTOK = SCRIPT_DIR / "cookies.txt"
-
 if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
     with open(COOKIES_TIKTOK, "w") as f:
         f.write(os.environ["COOKIES_TIKTOK"])
@@ -108,7 +107,6 @@ def verificar_limite(uid):
 
     return data[str(uid)]["downloads"]
 
-
 def incrementar_download(uid):
     data = load_json(ARQUIVO_CONTADOR)
     hoje = str(date.today())
@@ -120,7 +118,6 @@ def incrementar_download(uid):
 
     save_json(ARQUIVO_CONTADOR, data)
     return data[str(uid)]["downloads"]
-
 
 # -------------------------
 # COMMANDS
@@ -148,12 +145,10 @@ async def duvida(update, context):
 async def meuid(update, context):
     await update.message.reply_text(f"🆔 Seu ID: {update.message.from_user.id}")
 
-
 # -------------------------
 # DOWNLOAD + SHOPEE PATCH ABSOLUTO + LOGS
 # -------------------------
 async def baixar_video(update: Update, context):
-
     # LOG RAW DO UPDATE
     print("\n================ RAW UPDATE RECEBIDO ================")
     try:
@@ -162,37 +157,28 @@ async def baixar_video(update: Update, context):
         print("ERRO AO IMPRIMIR UPDATE RAW")
     print("===================================================\n")
 
-    # SAFE GUARD
     if not update.message or not update.message.text:
         return await update.message.reply_text("❌ Não consegui ler o link. Envie novamente.")
 
-    # Captura URL
     url = update.message.text.strip()
     uid = update.message.from_user.id
 
-    # Normalização
     original_url = url
     url = unquote(url).replace("\\/", "/").replace("\u200b", "").strip()
 
-    # LOG
     print(f"URL ORIGINAL: {original_url}")
     print(f"URL NORMALIZADA: {url}")
 
-    # -------------------------
-    # SHOPEE PATCH ABSOLUTO
-    # -------------------------
     if "shopee.com" in url or "sv.shopee.com" in url:
         await update.message.reply_text("🔄 Resolvendo link da Shopee...")
-
         try:
-            # Tenta extrair ID do share-video direto do link
             m = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", url)
 
             if not m:
                 print("ID não achado no link → tentando via HTML…")
                 try:
                     html = requests.get(url, timeout=10).text
-                    m = re.search(r"https://sv\\.shopee\\.com\\.br/share-video/([A-Za-z0-9=_\-]+)", html)
+                    m = re.search(r"https://sv\.shopee\.com\.br/share-video/([A-Za-z0-9=_\-]+)", html)
                 except Exception as e:
                     print("Erro ao baixar HTML Shopee:", e)
 
@@ -203,7 +189,6 @@ async def baixar_video(update: Update, context):
             share_id = m.group(1)
             print(f"ID EXTRAÍDO → {share_id}")
 
-            # Chamada API real
             api_url = f"https://sv.shopee.com.br/api/v4/share/video?shareVideoId={share_id}"
             print(f"API SHOPEE URL: {api_url}")
 
@@ -221,9 +206,6 @@ async def baixar_video(update: Update, context):
             print("ERRO SHOPEE PATCH →", e)
             return await update.message.reply_text(f"❌ Erro Shopee: {e}")
 
-    # -----------------------------------------------------------------
-    # AGORA SIM – LINK FINAL VALIDADO
-    # -----------------------------------------------------------------
     print(f"URL FINAL PARA DOWNLOAD: {url}")
 
     if not url.startswith("http"):
@@ -238,9 +220,6 @@ async def baixar_video(update: Update, context):
 
     await update.message.reply_text("⏳ Baixando...")
 
-    # -------------------------
-    # DOWNLOAD FINAL
-    # -------------------------
     try:
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         output = str(DOWNLOADS_DIR / f"%(id)s-{timestamp}.%(ext)s")
@@ -276,13 +255,11 @@ async def baixar_video(update: Update, context):
         print("YT-DLP ERRO RAW:\n", traceback.format_exc())
         await update.message.reply_text(f"❌ Erro ao baixar: {e}")
 
-
 # -------------------------
 # MAIN (WEBHOOK)
 # -------------------------
 def main():
     verificar_pagamentos_asaas()
-
     app = Application.builder().token(TOKEN).build()
 
     async def set_cmds(app):
@@ -299,7 +276,6 @@ def main():
     app.add_handler(CommandHandler("planos", planos))
     app.add_handler(CommandHandler("duvida", duvida))
     app.add_handler(CommandHandler("meuid", meuid))
-
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
 
     app.run_webhook(
@@ -308,7 +284,6 @@ def main():
         url_path="webhook",
         webhook_url=f"https://{os.environ['RENDER_EXTERNAL_HOSTNAME']}/webhook"
     )
-
 
 if __name__ == "__main__":
     main()
