@@ -171,7 +171,7 @@ async def meuid(update: Update, context):
 
 
 # -------------------------
-# DOWNLOAD
+# DOWNLOAD + SHOPEE FIX
 # -------------------------
 async def baixar_video(update: Update, context):
     url = update.message.text.strip()
@@ -188,6 +188,27 @@ async def baixar_video(update: Update, context):
         usos = verificar_limite(uid)
         if usos >= LIMITE_DIARIO:
             return await update.message.reply_text("⚠️ Limite diário atingido.")
+
+    # -------------------------------------------------------------------
+    # ✅ CORREÇÃO SHOPEE UNIVERSAL → resolve redirecionamento
+    # -------------------------------------------------------------------
+    if "shopee.com" in url:
+        try:
+            await update.message.reply_text("🔄 Resolvendo link da Shopee...")
+
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, allow_redirects=True) as resp:
+                    final = str(resp.url)
+
+            final = final.replace("?c=share_web&", "&").replace("?c=share_web", "")
+
+            if "sv.shopee.com" in final:
+                url = final
+            else:
+                return await update.message.reply_text("❌ Não foi possível resolver o link da Shopee.")
+        except Exception as e:
+            return await update.message.reply_text(f"❌ Erro ao resolver Shopee: {e}")
 
     await update.message.reply_text("⏳ Baixando...")
 
