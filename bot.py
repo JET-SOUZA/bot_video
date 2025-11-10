@@ -18,12 +18,12 @@ from telegram.ext import (
 import yt_dlp
 import requests
 import os
-    # jet testing line
 import json
 import asyncio
 import traceback
 from datetime import datetime, date
 from pathlib import Path
+
 
 # -------------------------
 # CONFIG
@@ -51,6 +51,7 @@ if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
     with open(COOKIES_TIKTOK, "w") as f:
         f.write(os.environ["COOKIES_TIKTOK"])
 
+
 # -------------------------
 # JSON UTILS
 # -------------------------
@@ -63,6 +64,7 @@ def load_json(path):
 def save_json(path, data):
     with open(path, "w") as f:
         json.dump(data, f)
+
 
 # -------------------------
 # PREMIUM
@@ -77,6 +79,7 @@ def save_premium(users):
 USUARIOS_PREMIUM = load_premium()
 USUARIOS_PREMIUM.add(ADMIN_ID)
 save_premium(USUARIOS_PREMIUM)
+
 
 # -------------------------
 # CHECK PAGAMENTOS ASAAS
@@ -96,6 +99,7 @@ def verificar_pagamentos_asaas():
         save_premium(USUARIOS_PREMIUM)
     except Exception as e:
         print("Erro ao verificar Asaas:", e)
+
 
 # -------------------------
 # LIMITE DIÁRIO
@@ -121,6 +125,7 @@ def incrementar_download(uid):
 
     save_json(ARQUIVO_CONTADOR, data)
     return data[str(uid)]["downloads"]
+
 
 # -------------------------
 # COMANDOS
@@ -154,8 +159,9 @@ async def duvida(update: Update, context):
 async def meuid(update: Update, context):
     await update.message.reply_text(f"🆔 Seu ID: {update.message.from_user.id}")
 
+
 # -------------------------
-# DOWNLOAD + SHOPEE FINAL FIX
+# DOWNLOAD + SHOPEE FINAL 2025
 # -------------------------
 async def baixar_video(update: Update, context):
     url = update.message.text.strip()
@@ -172,37 +178,63 @@ async def baixar_video(update: Update, context):
             return await update.message.reply_text("⚠️ Limite diário atingido.")
 
     # -------------------------------------------------------------------
-    # ✅ CORREÇÃO DEFINITIVA — Shopee API → video_url (yt-dlp suporta)
+    # ✅ CORREÇÃO DEFINITIVA SHOPEE 2025
+    # universal-link -> decode -> share-video -> API -> video_url
     # -------------------------------------------------------------------
     if "shopee.com" in url or "sv.shopee.com" in url:
         try:
             await update.message.reply_text("🔄 Resolvendo link da Shopee...")
 
+            from urllib.parse import unquote
             import re
 
-            # extrai o ID interno do share-video
+            # 1) Corrigir %3A%2F%2F
+            url = unquote(url)
+
+            # 2) Extrair ID do share-video
             m = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", url)
+
             if not m:
-                return await update.message.reply_text("❌ Não consegui extrair o ID do vídeo da Shopee.")
+                # fallback – buscar dentro do HTML
+                try:
+                    resp_html = requests.get(url, timeout=10)
+                    html = resp_html.text
+                    m = re.search(
+                        r"https://sv\.shopee\.com\.br/share-video/([A-Za-z0-9=_\-]+)",
+                        html
+                    )
+                except:
+                    pass
+
+            if not m:
+                return await update.message.reply_text(
+                    "❌ Não consegui extrair o ID do vídeo da Shopee."
+                )
 
             share_id = m.group(1)
 
-            # API que retorna o video_url verdadeiro
+            # 3) API OFICIAL Shopee que retorna video_url (único suportado)
             api_url = f"https://sv.shopee.com.br/api/v4/share/video?shareVideoId={share_id}"
 
-            resp = requests.get(api_url, timeout=10)
-            data = resp.json()
+            resp_api = requests.get(api_url, timeout=10)
+            data_api = resp_api.json()
 
-            video_url = data.get("data", {}).get("video_url")
+            video_url = data_api.get("data", {}).get("video_url")
 
             if not video_url:
-                return await update.message.reply_text("❌ Não foi possível extrair o link final (video_url) da Shopee.")
+                return await update.message.reply_text(
+                    "❌ A Shopee não forneceu o video_url (link final)."
+                )
 
-            url = video_url  # substitui pelo link real suportado
+            # ✅ Agora sim: yt-dlp aceita
+            url = video_url
 
         except Exception as e:
             return await update.message.reply_text(f"❌ Erro ao resolver Shopee: {e}")
 
+    # -------------------------------------------------------------------
+    # ✅ DOWNLOAD FINAL
+    # -------------------------------------------------------------------
     await update.message.reply_text("⏳ Baixando...")
 
     try:
@@ -240,6 +272,7 @@ async def baixar_video(update: Update, context):
         print(traceback.format_exc())
         await update.message.reply_text(f"❌ Erro ao baixar: {e}")
 
+
 # -------------------------
 # MAIN (WEBHOOK NATIVO)
 # -------------------------
@@ -271,6 +304,7 @@ def main():
         url_path="webhook",
         webhook_url=f"https://{os.environ['RENDER_EXTERNAL_HOSTNAME']}/webhook"
     )
+
 
 if __name__ == "__main__":
     main()
