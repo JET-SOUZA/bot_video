@@ -171,9 +171,9 @@ async def baixar_video(update: Update, context):
             return await update.message.reply_text("⚠️ Limite diário atingido.")
 
     # -------------------------------------------------------------------
-    # ✅ CORREÇÃO FINAL — EXTRAÇÃO REAL DE VÍDEO SHOPEE VIA HTML
+    # ✅ CORREÇÃO FINAL — extrai play-shopee (link real do vídeo)
     # -------------------------------------------------------------------
-    if "shopee.com" in url:
+    if "shopee.com" in url or "sv.shopee.com" in url:
         try:
             await update.message.reply_text("🔄 Resolvendo link da Shopee...")
 
@@ -181,12 +181,27 @@ async def baixar_video(update: Update, context):
             html = resp.text
 
             import re
-            match = re.search(r"https://sv\.shopee\.com\.br/share-video/[A-Za-z0-9=_\-]+", html)
+
+            # 1) Padrão primário: endpoint direto permitido pelo yt-dlp
+            match = re.search(
+                r"https://play-shopee\.com/api/v[0-9]/video/[A-Za-z0-9_\-/?=]+",
+                html
+            )
+
+            # 2) fallback — playUrl no JSON interno
+            if not match:
+                match = re.search(
+                    r'"playUrl"\s*:\s*"(https://play-shopee\.com[^"]+)"',
+                    html
+                )
 
             if match:
-                url = match.group(0)
+                url = match.group(0).replace("\\/", "/")
             else:
-                return await update.message.reply_text("❌ Não foi possível extrair o link real da Shopee.")
+                return await update.message.reply_text(
+                    "❌ Não foi possível encontrar o link real (play-shopee) do vídeo."
+                )
+
         except Exception as e:
             return await update.message.reply_text(f"❌ Erro ao resolver Shopee: {e}")
 
