@@ -1,4 +1,4 @@
-# Jet TikTokShop Bot - Render + PTB20 Webhook Nativo + Shopee Universal Extractor
+# Jet TikTokShop Bot - Render + PTB20 Webhook Nativo + Shopee Support
 
 from telegram import (
     Update,
@@ -47,7 +47,7 @@ if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
         f.write(os.environ["COOKIES_TIKTOK"])
 
 # -------------------------
-# JSON HELPERS
+# JSON
 # -------------------------
 def load_json(path):
     if os.path.exists(path):
@@ -99,17 +99,14 @@ def incrementar_download(uid):
     return data[str(uid)]["downloads"]
 
 # -------------------------
-# SHOPEE NORMALIZER + EXTRACTOR
+# SHOPEE NORMALIZER + API EXTRACTOR
 # -------------------------
 def resolver_shopee(url: str) -> str:
     if "shopee.com" in url and "universal-link" in url:
-        try:
-            parsed = urllib.parse.urlparse(url)
-            params = urllib.parse.parse_qs(parsed.query)
-            if "redir" in params:
-                return urllib.parse.unquote(params["redir"][0])
-        except:
-            pass
+        parsed = urllib.parse.urlparse(url)
+        params = urllib.parse.parse_qs(parsed.query)
+        if "redir" in params:
+            return urllib.parse.unquote(params["redir"][0])
     return url
 
 async def get_shopee_video(url: str) -> str | None:
@@ -118,18 +115,18 @@ async def get_shopee_video(url: str) -> str | None:
         return None
 
     vid = match.group(1)
-    api_url = f"https://sv.shopee.com.br/api/v4/mms/meta?video_id={vid}"
+    api = f"https://sv.shopee.com.br/api/v4/mms/meta?video_id={vid}"
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(api_url, timeout=10) as resp:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(api, timeout=10) as resp:
                 data = await resp.json()
 
-        formats = data.get("data", {}).get("video_info", {}).get("formats", [])
-        if not formats:
+        fmts = data.get("data", {}).get("video_info", {}).get("formats", [])
+        if not fmts:
             return None
 
-        return formats[0].get("url")
+        return fmts[0].get("url")
     except:
         return None
 
@@ -138,13 +135,9 @@ async def get_shopee_video(url: str) -> str | None:
 # -------------------------
 async def start(update: Update, context):
     msg = (
-        "🎬 *Bem-vindo ao Jet TikTokShop Bot!*
-
-"
-        "👉 Envie o link do vídeo para baixar.
-"
-        "⚠️ Free: *10 vídeos por dia*
-"
+        "🎬 *Bem-vindo ao Jet TikTokShop Bot!*\n\n"
+        "👉 Envie o link do vídeo para baixar.\n"
+        "⚠️ Free: *10 vídeos por dia*\n"
         "💎 Premium: ilimitado"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
@@ -155,7 +148,6 @@ async def planos(update: Update, context):
         ("3 Meses", 25.90, "https://www.asaas.com/c/o9pg4uxrpgwnmqzd"),
         ("1 Ano", 89.90, "https://www.asaas.com/c/puto9coszhwgprqc"),
     ]
-
     kb = [[InlineKeyboardButton(f"💎 {d} - R$ {v}", url=u)] for d, v, u in planos]
     await update.message.reply_text("💎 Planos Premium:", reply_markup=InlineKeyboardMarkup(kb))
 
@@ -180,7 +172,7 @@ async def baixar_video(update: Update, context):
             return await update.message.reply_text("⚠️ Limite diário atingido.")
 
     # -------------------------
-    # SHOPEE VIDEO
+    # SHOPEE
     # -------------------------
     if "sv.shopee.com.br/share-video" in url:
         await update.message.reply_text("⏳ Obtendo vídeo da Shopee...")
@@ -192,8 +184,8 @@ async def baixar_video(update: Update, context):
         try:
             file_path = DOWNLOADS_DIR / f"shopee_{datetime.now().timestamp()}.mp4"
 
-            async with aiohttp.ClientSession() as session:
-                async with session.get(mp4) as resp:
+            async with aiohttp.ClientSession() as s:
+                async with s.get(mp4) as resp:
                     with open(file_path, "wb") as f:
                         f.write(await resp.read())
 
@@ -203,17 +195,17 @@ async def baixar_video(update: Update, context):
             os.remove(file_path)
 
             if uid not in USUARIOS_PREMIUM:
-                new = incrementar_download(uid)
-                await update.message.reply_text(f"📊 Uso: {new}/{LIMITE_DIARIO}")
+                uso = incrementar_download(uid)
+                await update.message.reply_text(f"📊 Uso: {uso}/{LIMITE_DIARIO}")
 
         except Exception as e:
-            print("Shopee DL error:", e)
+            print("Shopee Error:", e)
             return await update.message.reply_text("❌ Falha ao baixar vídeo da Shopee.")
 
         return
 
     # -------------------------
-    # YT-DLP (TikTok etc)
+    # YT-DLP
     # -------------------------
     await update.message.reply_text("⏳ Baixando...")
 
@@ -228,4 +220,4 @@ async def baixar_video(update: Update, context):
             "noplaylist": True,
         }
 
-            if COOKIES_TIKTOK.exists():
+        if COOKIES_TIKTOK.exists():
