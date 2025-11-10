@@ -24,7 +24,6 @@ import traceback
 from datetime import datetime, date
 from pathlib import Path
 
-
 # -------------------------
 # CONFIG
 # -------------------------
@@ -51,7 +50,6 @@ if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
     with open(COOKIES_TIKTOK, "w") as f:
         f.write(os.environ["COOKIES_TIKTOK"])
 
-
 # -------------------------
 # JSON UTILS
 # -------------------------
@@ -61,11 +59,9 @@ def load_json(path):
             return json.load(f)
     return {}
 
-
 def save_json(path, data):
     with open(path, "w") as f:
         json.dump(data, f)
-
 
 # -------------------------
 # PREMIUM
@@ -74,23 +70,17 @@ def load_premium():
     data = load_json(ARQUIVO_PREMIUM)
     return set(map(int, data.get("premium_users", [])))
 
-
 def save_premium(users):
     save_json(ARQUIVO_PREMIUM, {"premium_users": list(users)})
-
 
 USUARIOS_PREMIUM = load_premium()
 USUARIOS_PREMIUM.add(ADMIN_ID)
 save_premium(USUARIOS_PREMIUM)
 
-
 # -------------------------
 # CHECK PAGAMENTOS ASAAS
 # -------------------------
 def verificar_pagamentos_asaas():
-    """
-    Busca pagamentos confirmados no Asaas e atualiza a lista Premium.
-    """
     try:
         url = f"{ASAAS_BASE_URL}/payments?status=CONFIRMED&limit=100"
         headers = {"access_token": ASAAS_API_KEY}
@@ -106,7 +96,6 @@ def verificar_pagamentos_asaas():
     except Exception as e:
         print("Erro ao verificar Asaas:", e)
 
-
 # -------------------------
 # LIMITE DIÁRIO
 # -------------------------
@@ -120,7 +109,6 @@ def verificar_limite(uid):
 
     return data[str(uid)]["downloads"]
 
-
 def incrementar_download(uid):
     data = load_json(ARQUIVO_CONTADOR)
     hoje = str(date.today())
@@ -133,7 +121,6 @@ def incrementar_download(uid):
     save_json(ARQUIVO_CONTADOR, data)
     return data[str(uid)]["downloads"]
 
-
 # -------------------------
 # COMANDOS
 # -------------------------
@@ -145,7 +132,6 @@ async def start(update: Update, context):
         "💎 Premium: ilimitado\n"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
-
 
 async def planos(update: Update, context):
     planos = [
@@ -161,14 +147,11 @@ async def planos(update: Update, context):
         reply_markup=InlineKeyboardMarkup(kb)
     )
 
-
 async def duvida(update: Update, context):
     await update.message.reply_text("📞 Suporte: lavimurtha@gmail.com")
 
-
 async def meuid(update: Update, context):
     await update.message.reply_text(f"🆔 Seu ID: {update.message.from_user.id}")
-
 
 # -------------------------
 # DOWNLOAD + SHOPEE FIX
@@ -180,33 +163,30 @@ async def baixar_video(update: Update, context):
     if not url.startswith("http"):
         return await update.message.reply_text("❌ Envie um link válido.")
 
-    # Premium automático
     verificar_pagamentos_asaas()
 
-    # Limite diário
     if uid not in USUARIOS_PREMIUM:
         usos = verificar_limite(uid)
         if usos >= LIMITE_DIARIO:
             return await update.message.reply_text("⚠️ Limite diário atingido.")
 
     # -------------------------------------------------------------------
-    # ✅ CORREÇÃO SHOPEE UNIVERSAL → resolve redirecionamento
+    # ✅ CORREÇÃO FINAL — EXTRAÇÃO REAL DE VÍDEO SHOPEE VIA HTML
     # -------------------------------------------------------------------
     if "shopee.com" in url:
         try:
             await update.message.reply_text("🔄 Resolvendo link da Shopee...")
 
-            import aiohttp
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, allow_redirects=True) as resp:
-                    final = str(resp.url)
+            resp = requests.get(url, timeout=10)
+            html = resp.text
 
-            final = final.replace("?c=share_web&", "&").replace("?c=share_web", "")
+            import re
+            match = re.search(r"https://sv\.shopee\.com\.br/share-video/[A-Za-z0-9=_\-]+", html)
 
-            if "sv.shopee.com" in final:
-                url = final
+            if match:
+                url = match.group(0)
             else:
-                return await update.message.reply_text("❌ Não foi possível resolver o link da Shopee.")
+                return await update.message.reply_text("❌ Não foi possível extrair o link real da Shopee.")
         except Exception as e:
             return await update.message.reply_text(f"❌ Erro ao resolver Shopee: {e}")
 
@@ -247,12 +227,10 @@ async def baixar_video(update: Update, context):
         print(traceback.format_exc())
         await update.message.reply_text(f"❌ Erro ao baixar: {e}")
 
-
 # -------------------------
 # MAIN (WEBHOOK NATIVO)
 # -------------------------
 def main():
-    # Atualiza premium automático
     verificar_pagamentos_asaas()
 
     app = Application.builder().token(TOKEN).build()
@@ -267,7 +245,6 @@ def main():
 
     app.post_init = set_commands
 
-    # Handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("planos", planos))
     app.add_handler(CommandHandler("duvida", duvida))
@@ -275,14 +252,12 @@ def main():
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
 
-    # Webhook nativo
     app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
         url_path="webhook",
         webhook_url=f"https://{os.environ['RENDER_EXTERNAL_HOSTNAME']}/webhook"
     )
-
 
 if __name__ == "__main__":
     main()
