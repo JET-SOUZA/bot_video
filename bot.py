@@ -139,9 +139,13 @@ async def get_shopee_video(url: str) -> str | None:
 # -------------------------
 async def start(update: Update, context):
     msg = (
-        "🎬 *Bem-vindo ao Jet TikTokShop Bot!*\n\n"
-        "👉 Envie o link do vídeo para baixar.\n"
-        "⚠️ Free: *10 vídeos por dia*\n"
+        "🎬 *Bem-vindo ao Jet TikTokShop Bot!*
+
+"
+        "👉 Envie o link do vídeo para baixar.
+"
+        "⚠️ Free: *10 vídeos por dia*
+"
         "💎 Premium: ilimitado"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
@@ -232,4 +236,4 @@ async def baixar_video(update: Update, context):
                 data = ydl.extract_info(url, download=True)
                 return ydl.prepare_filename(data)
 
-        loop = asyncio.get_running
+                loop = asyncio.get_running_loop()
