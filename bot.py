@@ -46,7 +46,6 @@ DOWNLOADS_DIR.mkdir(exist_ok=True)
 
 COOKIES_TIKTOK = SCRIPT_DIR / "cookies.txt"
 
-# Criar cookies se vierem pelo Render
 if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
     with open(COOKIES_TIKTOK, "w") as f:
         f.write(os.environ["COOKIES_TIKTOK"])
@@ -97,6 +96,7 @@ def verificar_pagamentos_asaas():
                 USUARIOS_PREMIUM.add(uid)
 
         save_premium(USUARIOS_PREMIUM)
+
     except Exception as e:
         print("Erro ao verificar Asaas:", e)
 
@@ -108,7 +108,7 @@ def verificar_limite(uid):
     data = load_json(ARQUIVO_CONTADOR)
     hoje = str(date.today())
 
-    if str(uid) not in data or data[str(uid)]["data"] != hoje:
+    if uid not in data or data[str(uid)]["data"] != hoje:
         data[str(uid)] = {"data": hoje, "downloads": 0}
         save_json(ARQUIVO_CONTADOR, data)
 
@@ -118,7 +118,7 @@ def incrementar_download(uid):
     data = load_json(ARQUIVO_CONTADOR)
     hoje = str(date.today())
 
-    if str(uid) not in data or data[str(uid)]["data"] != hoje:
+    if uid not in data or data[str(uid)]["data"] != hoje:
         data[str(uid)] = {"data": hoje, "downloads": 1}
     else:
         data[str(uid)]["downloads"] += 1
@@ -128,64 +128,34 @@ def incrementar_download(uid):
 
 
 # -------------------------
-# COMANDOS
-# -------------------------
-async def start(update: Update, context):
-    msg = (
-        "🎬 *Bem-vindo ao Jet TikTokShop Bot!*\n\n"
-        "👉 Envie um link de vídeo para baixar.\n"
-        "⚠️ Free: *10 vídeos por dia*\n"
-        "💎 Premium: ilimitado\n"
-    )
-    await update.message.reply_text(msg, parse_mode="Markdown")
-
-async def planos(update: Update, context):
-    planos = [
-        ("1 Mês", 9.90, "https://www.asaas.com/c/knu5vub6ejc2yyja"),
-        ("3 Meses", 25.90, "https://www.asaas.com/c/o9pg4uxrpgwnmqzd"),
-        ("1 Ano", 89.90, "https://www.asaas.com/c/puto9coszhwgprqc"),
-    ]
-
-    kb = [[InlineKeyboardButton(f"💎 {d} – R$ {v}", url=u)] for d, v, u in planos]
-
-    await update.message.reply_text("💎 Planos Premium:", reply_markup=InlineKeyboardMarkup(kb))
-
-async def duvida(update: Update, context):
-    await update.message.reply_text("📞 Suporte: lavimurtha@gmail.com")
-
-async def meuid(update: Update, context):
-    await update.message.reply_text(f"🆔 Seu ID: {update.message.from_user.id}")
-
-
-# -------------------------
 # DOWNLOAD + SHOPEE PATCH ABSOLUTO
 # -------------------------
 async def baixar_video(update: Update, context):
+
+    # ✅ INÍCIO DA FUNÇÃO
     url = update.message.text.strip()
     uid = update.message.from_user.id
 
-    # -----------------------------------------------------------
-    # ✅ SHOPEE PATCH ABSOLUTO – executa antes de qualquer coisa
-    # -----------------------------------------------------------
+    # ✅ SHOPEE PATCH ABSOLUTO — SEMPRE EXECUTA PRIMEIRO
     from urllib.parse import unquote
     import re
 
+    original_url = url
     url = unquote(url).replace("\\/", "/").replace("\u200b", "").strip()
 
+    # Detecta Shopee
     if "shopee.com" in url or "sv.shopee.com" in url:
         try:
             await update.message.reply_text("🔄 Resolvendo link da Shopee...")
 
-            # 1) Extrair o ID do share-video
+            # Extrair share-video ID
             m = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", url)
 
-            # fallback → HTML
             if not m:
                 try:
-                    resp = requests.get(url, timeout=10)
-                    html = resp.text
+                    html = requests.get(url, timeout=10).text
                     m = re.search(
-                        r"https://sv\.shopee\.com\.br/share-video/([A-Za-z0-9=_\-]+)",
+                        r"https://sv\.shopee\.com\.br/share-video/([A-Za-z0-9=_\-]+)", 
                         html
                     )
                 except:
@@ -196,25 +166,20 @@ async def baixar_video(update: Update, context):
 
             share_id = m.group(1)
 
-            # 2) API oficial Shopee → retornar video_url
+            # API v4 Shopee
             api_url = f"https://sv.shopee.com.br/api/v4/share/video?shareVideoId={share_id}"
             data = requests.get(api_url, timeout=10).json()
 
             video_url = data.get("data", {}).get("video_url")
             if not video_url:
-                return await update.message.reply_text("❌ A Shopee não forneceu o video_url final.")
+                return await update.message.reply_text("❌ A Shopee não retornou o video_url.")
 
-            # ✅ URL final para o yt-dlp
-            url = video_url
+            url = video_url  # ✅ Agora sim
 
         except Exception as e:
-            return await update.message.reply_text(f"❌ Erro Shopee: {e}")
+            return await update.message.reply_text(f"❌ Erro ao resolver Shopee: {e}")
 
-    # -----------------------------------------------------------
-    # VALIDAÇÃO
-    # -----------------------------------------------------------
-    if not url.startswith("http"):
-        return await update.message.reply_text("❌ Envie um link válido.")
+    # ✅ VALIDADO — A PARTIR DAQUI O BOT FUNCIONA NORMALMENTE
 
     verificar_pagamentos_asaas()
 
@@ -223,31 +188,32 @@ async def baixar_video(update: Update, context):
         if usos >= LIMITE_DIARIO:
             return await update.message.reply_text("⚠️ Limite diário atingido.")
 
-    # -----------------------------------------------------------
-    # DOWNLOAD
-    # -----------------------------------------------------------
+    if not url.startswith("http"):
+        return await update.message.reply_text("❌ Link inválido.")
+
     await update.message.reply_text("⏳ Baixando...")
 
+    # -------------------------
+    # DOWNLOAD VIA YT-DLP
+    # -------------------------
     try:
-        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        output = str(DOWNLOADS_DIR / f"%(id)s-{timestamp}.%(ext)s")
+        output = str(DOWNLOADS_DIR / f"%(id)s-{datetime.now().strftime('%H%M%S')}.%(ext)s")
 
         ydl_opts = {
             "outtmpl": output,
             "format": "bestvideo+bestaudio/best",
-            "merge_output_format": "mp4",
-            "noplaylist": True,
+            "merge_output_format": "mp4"
         }
 
         if COOKIES_TIKTOK.exists():
             ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
 
-        def run_dl(url):
+        def run(url):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
                 return ydl.prepare_filename(info)
 
-        file_path = await asyncio.get_running_loop().run_in_executor(None, lambda: run_dl(url))
+        file_path = await asyncio.get_running_loop().run_in_executor(None, lambda: run(url))
 
         with open(file_path, "rb") as f:
             await update.message.reply_video(f, caption="✅ Seu vídeo está aqui!")
@@ -273,8 +239,8 @@ def main():
 
     async def set_commands(app):
         await app.bot.set_my_commands([
-            BotCommand("start", "Iniciar"),
-            BotCommand("planos", "Planos"),
+            BotCommand("start", "Início"),
+            BotCommand("planos", "Planos Premium"),
             BotCommand("duvida", "Ajuda"),
             BotCommand("meuid", "Mostrar ID"),
         ])
@@ -283,7 +249,7 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("planos", planos))
-    app.add_handler(CommandHandler("duvida", duvida))
+    app.add.add_handler(CommandHandler("duvida", duvida))
     app.add_handler(CommandHandler("meuid", meuid))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
