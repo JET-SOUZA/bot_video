@@ -1,14 +1,12 @@
-# Jet TikTokShop Bot - Render Compatible (Flask HTTP Server + PTB20)
+# Jet TikTokShop Bot - Render + PTB20 Webhook Nativo (sem Flask)
 
 from telegram import (
     Update,
     InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    ReplyKeyboardRemove,
-    BotCommand
+    InlineKeyboardMarkup
 )
 from telegram.ext import (
-    ApplicationBuilder,
+    Application,
     CommandHandler,
     MessageHandler,
     ContextTypes,
@@ -18,26 +16,23 @@ from telegram.ext import (
 import yt_dlp
 import os
 import json
-import aiohttp
 import asyncio
 import traceback
 from datetime import date, datetime
 from pathlib import Path
-from flask import Flask, request
 
 
 # -------------------------
-# CONFIGURAÇÕES
+# CONFIG
 # -------------------------
 TOKEN = os.environ.get("BOT_TOKEN")
-PORT = int(os.environ.get("PORT", 5000))
+PORT = int(os.environ.get("PORT", 10000))
 
 ADMIN_ID = 5593153639
 LIMITE_DIARIO = 10
 
 ARQUIVO_CONTADOR = "downloads.json"
 ARQUIVO_PREMIUM = "premium.json"
-
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 DOWNLOADS_DIR = SCRIPT_DIR / "downloads"
@@ -77,7 +72,7 @@ def save_premium(users):
 
 
 USUARIOS_PREMIUM = load_premium()
-USUARIOS_PREMIUM.update({ADMIN_ID, 0, 0, 0})
+USUARIOS_PREMIUM.update({ADMIN_ID})
 save_premium(USUARIOS_PREMIUM)
 
 
@@ -193,44 +188,29 @@ async def baixar_video(update: Update, context):
 
 
 # -------------------------
-# FLASK (WEBHOOK)
-# -------------------------
-flask_app = Flask(__name__)
-
-
-@flask_app.route("/health")
-def health():
-    return "OK", 200
-
-
-@flask_app.route("/webhook_telegram", methods=["POST"])
-def webhook_telegram():
-    update = Update.de_json(request.get_json(force=True), bot_app.bot)
-    asyncio.run(bot_app.process_update(update))
-    return "OK", 200
-
-
-# -------------------------
-# MAIN
+# MAIN (WEBHOOK NATIVO)
 # -------------------------
 def main():
-    global bot_app
-    bot_app = ApplicationBuilder().token(TOKEN).build()
+    app = (
+        Application.builder()
+        .token(TOKEN)
+        .build()
+    )
 
-    bot_app.add_handler(CommandHandler("start", start))
-    bot_app.add_handler(CommandHandler("planos", planos))
-    bot_app.add_handler(CommandHandler("duvida", duvida))
-    bot_app.add_handler(CommandHandler("meuid", meuid))
+    # Handlers
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("planos", planos))
+    app.add_handler(CommandHandler("duvida", duvida))
+    app.add_handler(CommandHandler("meuid", meuid))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
 
-    bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
-
-    # Inicializa bot — sem webhook interno!!
-    asyncio.run(bot_app.initialize())
-    asyncio.run(bot_app.start())
-
-    print("✅ Bot iniciado e aguardando webhooks...")
-
-    flask_app.run(host="0.0.0.0", port=PORT)
+    # Rodar webhook corretamente
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path="webhook",
+        webhook_url=f"https://{os.environ['RENDER_EXTERNAL_HOSTNAME']}/webhook"
+    )
 
 
 if __name__ == "__main__":
