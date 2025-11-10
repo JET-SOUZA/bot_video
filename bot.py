@@ -20,6 +20,7 @@ import asyncio
 import traceback
 from datetime import date, datetime
 from pathlib import Path
+import urllib.parse
 
 
 # -------------------------
@@ -49,11 +50,13 @@ if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
 # -------------------------
 # JSON HELPERS
 # -------------------------
+
 def load_json(path):
     if os.path.exists(path):
         with open(path, "r") as f:
             return json.load(f)
     return {}
+
 
 def save_json(path, data):
     with open(path, "w") as f:
@@ -63,9 +66,11 @@ def save_json(path, data):
 # -------------------------
 # PREMIUM
 # -------------------------
+
 def load_premium():
     data = load_json(ARQUIVO_PREMIUM)
     return set(map(int, data.get("premium_users", [])))
+
 
 def save_premium(users):
     save_json(ARQUIVO_PREMIUM, {"premium_users": list(users)})
@@ -79,6 +84,7 @@ save_premium(USUARIOS_PREMIUM)
 # -------------------------
 # LIMITES
 # -------------------------
+
 def verificar_limite(uid):
     data = load_json(ARQUIVO_CONTADOR)
     hoje = str(date.today())
@@ -88,6 +94,7 @@ def verificar_limite(uid):
         save_json(ARQUIVO_CONTADOR, data)
 
     return data[str(uid)]["downloads"]
+
 
 def incrementar_download(uid):
     data = load_json(ARQUIVO_CONTADOR)
@@ -100,6 +107,29 @@ def incrementar_download(uid):
 
     save_json(ARQUIVO_CONTADOR, data)
     return data[str(uid)]["downloads"]
+
+
+# -------------------------
+# SHOPEE LINK NORMALIZER
+# -------------------------
+
+def resolver_shopee(url: str) -> str:
+    """
+    Normaliza URLs universais da Shopee, extraindo o link real de vídeo.
+    """
+    if "shopee.com" in url and "universal-link" in url:
+        try:
+            parsed = urllib.parse.urlparse(url)
+            params = urllib.parse.parse_qs(parsed.query)
+
+            if "redir" in params:
+                real_url = params["redir"][0]
+                real_url = urllib.parse.unquote(real_url)
+                return real_url
+        except:
+            pass
+
+    return url
 
 
 # -------------------------
@@ -138,7 +168,7 @@ async def meuid(update: Update, context):
 # DOWNLOAD
 # -------------------------
 async def baixar_video(update: Update, context):
-    url = update.message.text.strip()
+    url = resolver_shopee(update.message.text.strip())
     uid = update.message.from_user.id
 
     if not url.startswith("http"):
