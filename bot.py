@@ -1,5 +1,15 @@
-# Jet TikTokShop Bot - Arquitetura C + Shopee Patch Absoluto + Safe Input + LOGS
+# Jet TikTokShop Bot - Arquitetura C + Patch Shopee Absoluto + Safe Input + LOGS + suporte shp.ee
 # PTB20 Webhook + Asaas + TikTok
+
+import os
+import json
+import requests
+import traceback
+import asyncio
+from datetime import datetime, date
+from pathlib import Path
+from urllib.parse import unquote
+import re
 
 from telegram import (
     Update,
@@ -16,31 +26,15 @@ from telegram.ext import (
 )
 
 import yt_dlp
-import requests
-import os
-import json
-import asyncio
-import traceback
-from datetime import datetime, date
-from pathlib import Path
-from urllib.parse import unquote
-import re
 
 # -------------------------
 # CONFIG
 # -------------------------
-TOKEN = os.environ.get("BOT_TOKEN")
+TOKEN = os.environ.get("TOKEN")
 ASAAS_API_KEY = os.environ.get("ASAAS_API_KEY")
 ASAAS_BASE_URL = "https://www.asaas.com/api/v3"
 
-ADMIN_ID = 5593153639
-LIMITE_DIARIO = 10
-PORT = int(os.environ.get("PORT", 10000))
-
-ARQUIVO_CONTADOR = "downloads.json"
-ARQUIVO_PREMIUM = "premium.json"
-
-SCRIPT_DIR = Path(__file__).parent.resolve()
+SCRIPT_DIR = Path(__file__).parent
 DOWNLOADS_DIR = SCRIPT_DIR / "downloads"
 DOWNLOADS_DIR.mkdir(exist_ok=True)
 
@@ -49,30 +43,27 @@ if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
     with open(COOKIES_TIKTOK, "w") as f:
         f.write(os.environ["COOKIES_TIKTOK"])
 
+ARQUIVO_CONTADOR = "downloads.json"
+USUARIOS_PREMIUM = set()
+ADMIN_ID = 5593153639
+LIMITE_DIARIO = 10
+
 # -------------------------
 # JSON UTILS
 # -------------------------
 def load_json(path):
-    if os.path.exists(path):
-        with open(path, "r") as f:
-            return json.load(f)
-    return {}
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r") as f:
+        return json.load(f)
 
 def save_json(path, data):
     with open(path, "w") as f:
         json.dump(data, f)
 
-# -------------------------
-# PREMIUM
-# -------------------------
-def load_premium():
-    data = load_json(ARQUIVO_PREMIUM)
-    return set(map(int, data.get("premium_users", [])))
-
 def save_premium(users):
-    save_json(ARQUIVO_PREMIUM, {"premium_users": list(users)})
+    save_json("premium.json", list(users))
 
-USUARIOS_PREMIUM = load_premium()
 USUARIOS_PREMIUM.add(ADMIN_ID)
 save_premium(USUARIOS_PREMIUM)
 
@@ -91,6 +82,7 @@ def verificar_pagamentos_asaas():
                 USUARIOS_PREMIUM.add(uid)
 
         save_premium(USUARIOS_PREMIUM)
+
     except Exception as e:
         print("ERRO ASAAS:", e)
 
@@ -100,27 +92,23 @@ def verificar_pagamentos_asaas():
 def verificar_limite(uid):
     data = load_json(ARQUIVO_CONTADOR)
     hoje = str(date.today())
-
     if str(uid) not in data or data[str(uid)]["data"] != hoje:
         data[str(uid)] = {"data": hoje, "downloads": 0}
         save_json(ARQUIVO_CONTADOR, data)
-
     return data[str(uid)]["downloads"]
 
 def incrementar_download(uid):
     data = load_json(ARQUIVO_CONTADOR)
     hoje = str(date.today())
-
     if str(uid) not in data or data[str(uid)]["data"] != hoje:
         data[str(uid)] = {"data": hoje, "downloads": 1}
     else:
         data[str(uid)]["downloads"] += 1
-
     save_json(ARQUIVO_CONTADOR, data)
     return data[str(uid)]["downloads"]
 
 # -------------------------
-# COMMANDS
+# COMANDOS
 # -------------------------
 async def start(update, context):
     await update.message.reply_text(
@@ -146,10 +134,21 @@ async def meuid(update, context):
     await update.message.reply_text(f"🆔 Seu ID: {update.message.from_user.id}")
 
 # -------------------------
+# FUNÇÃO PARA RESOLVER LINKS CURTOS SHP.EE
+# -------------------------
+def resolve_shopee_shortlink(url):
+    try:
+        r = requests.head(url, allow_redirects=True, timeout=10)
+        print(f"Shortlink {url} resolvido para {r.url}")
+        return r.url
+    except Exception as e:
+        print("Erro ao resolver shortlink Shopee:", e)
+        return url
+
+# -------------------------
 # DOWNLOAD + SHOPEE PATCH ABSOLUTO + LOGS
 # -------------------------
 async def baixar_video(update: Update, context):
-    # LOG RAW DO UPDATE
     print("\n================ RAW UPDATE RECEBIDO ================")
     try:
         print(update.to_dict())
@@ -163,17 +162,22 @@ async def baixar_video(update: Update, context):
     url = update.message.text.strip()
     uid = update.message.from_user.id
 
+    # NORMALIZAÇÃO
     original_url = url
     url = unquote(url).replace("\\/", "/").replace("\u200b", "").strip()
-
     print(f"URL ORIGINAL: {original_url}")
     print(f"URL NORMALIZADA: {url}")
 
+    # RESOLVE SHP.EE SHORTLINKS
+    if "shp.ee" in url:
+        url = resolve_shopee_shortlink(url)
+        print(f"URL FINAL APÓS SHP.EE: {url}")
+
+    # SHOPEE PATCH ABSOLUTO
     if "shopee.com" in url or "sv.shopee.com" in url:
         await update.message.reply_text("🔄 Resolvendo link da Shopee...")
         try:
             m = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", url)
-
             if not m:
                 print("ID não achado no link → tentando via HTML…")
                 try:
@@ -213,26 +217,26 @@ async def baixar_video(update: Update, context):
 
     verificar_pagamentos_asaas()
 
-    if uid not in USUARIOS_PREMIUM:
-        usos = verificar_limite(uid)
-        if usos >= LIMITE_DIARIO:
-            return await update.message.reply_text("⚠️ Limite diário atingido.")
+    usos = verificar_limite(uid)
+    if uid not in USUARIOS_PREMIUM and usos >= LIMITE_DIARIO:
+        return await update.message.reply_text("⚠️ Limite diário atingido.")
 
     await update.message.reply_text("⏳ Baixando...")
 
+    # DOWNLOAD VIA YT-DLP
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    output = str(DOWNLOADS_DIR / f"%(id)s-{timestamp}.%(ext)s")
+
+    ydl_opts = {
+        "outtmpl": output,
+        "format": "bestvideo+bestaudio/best",
+        "merge_output_format": "mp4",
+    }
+
+    if COOKIES_TIKTOK.exists():
+        ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
+
     try:
-        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        output = str(DOWNLOADS_DIR / f"%(id)s-{timestamp}.%(ext)s")
-
-        ydl_opts = {
-            "outtmpl": output,
-            "format": "bestvideo+bestaudio/best",
-            "merge_output_format": "mp4",
-        }
-
-        if COOKIES_TIKTOK.exists():
-            ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
-
         def run(url):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 print("EXECUTANDO YT-DLP COM URL:", url)
@@ -243,13 +247,12 @@ async def baixar_video(update: Update, context):
         file_path = await loop.run_in_executor(None, lambda: run(url))
 
         with open(file_path, "rb") as f:
-            await update.message.reply_video(f, caption="✅ Pronto!")
+            await update.message.reply_video(f, caption="✅ Pronto! Seu vídeo está aqui!")
+
+        novo = incrementar_download(uid)
+        await update.message.reply_text(f"📊 Uso: {novo}/{LIMITE_DIARIO}")
 
         os.remove(file_path)
-
-        if uid not in USUARIOS_PREMIUM:
-            novo = incrementar_download(uid)
-            await update.message.reply_text(f"📊 Uso: {novo}/{LIMITE_DIARIO}")
 
     except Exception as e:
         print("YT-DLP ERRO RAW:\n", traceback.format_exc())
@@ -280,8 +283,7 @@ def main():
 
     app.run_webhook(
         listen="0.0.0.0",
-        port=PORT,
-        url_path="webhook",
+        port=int(os.environ.get("PORT", 10000)),
         webhook_url=f"https://{os.environ['RENDER_EXTERNAL_HOSTNAME']}/webhook"
     )
 
