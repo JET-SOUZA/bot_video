@@ -18,6 +18,7 @@ from telegram.ext import (
 import yt_dlp
 import requests
 import os
+    # jet testing line
 import json
 import asyncio
 import traceback
@@ -154,7 +155,7 @@ async def meuid(update: Update, context):
     await update.message.reply_text(f"🆔 Seu ID: {update.message.from_user.id}")
 
 # -------------------------
-# DOWNLOAD + SHOPEE FIX
+# DOWNLOAD + SHOPEE FINAL FIX
 # -------------------------
 async def baixar_video(update: Update, context):
     url = update.message.text.strip()
@@ -171,36 +172,33 @@ async def baixar_video(update: Update, context):
             return await update.message.reply_text("⚠️ Limite diário atingido.")
 
     # -------------------------------------------------------------------
-    # ✅ CORREÇÃO FINAL — extrai play-shopee (link real do vídeo)
+    # ✅ CORREÇÃO DEFINITIVA — Shopee API → video_url (yt-dlp suporta)
     # -------------------------------------------------------------------
     if "shopee.com" in url or "sv.shopee.com" in url:
         try:
             await update.message.reply_text("🔄 Resolvendo link da Shopee...")
 
-            resp = requests.get(url, timeout=10)
-            html = resp.text
-
             import re
 
-            # 1) Padrão primário: endpoint direto permitido pelo yt-dlp
-            match = re.search(
-                r"https://play-shopee\.com/api/v[0-9]/video/[A-Za-z0-9_\-/?=]+",
-                html
-            )
+            # extrai o ID interno do share-video
+            m = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", url)
+            if not m:
+                return await update.message.reply_text("❌ Não consegui extrair o ID do vídeo da Shopee.")
 
-            # 2) fallback — playUrl no JSON interno
-            if not match:
-                match = re.search(
-                    r'"playUrl"\s*:\s*"(https://play-shopee\.com[^"]+)"',
-                    html
-                )
+            share_id = m.group(1)
 
-            if match:
-                url = match.group(0).replace("\\/", "/")
-            else:
-                return await update.message.reply_text(
-                    "❌ Não foi possível encontrar o link real (play-shopee) do vídeo."
-                )
+            # API que retorna o video_url verdadeiro
+            api_url = f"https://sv.shopee.com.br/api/v4/share/video?shareVideoId={share_id}"
+
+            resp = requests.get(api_url, timeout=10)
+            data = resp.json()
+
+            video_url = data.get("data", {}).get("video_url")
+
+            if not video_url:
+                return await update.message.reply_text("❌ Não foi possível extrair o link final (video_url) da Shopee.")
+
+            url = video_url  # substitui pelo link real suportado
 
         except Exception as e:
             return await update.message.reply_text(f"❌ Erro ao resolver Shopee: {e}")
