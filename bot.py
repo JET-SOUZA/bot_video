@@ -148,10 +148,7 @@ async def planos(update: Update, context):
 
     kb = [[InlineKeyboardButton(f"💎 {d} – R$ {v}", url=u)] for d, v, u in planos]
 
-    await update.message.reply_text(
-        "💎 Planos Premium:",
-        reply_markup=InlineKeyboardMarkup(kb)
-    )
+    await update.message.reply_text("💎 Planos Premium:", reply_markup=InlineKeyboardMarkup(kb))
 
 async def duvida(update: Update, context):
     await update.message.reply_text("📞 Suporte: lavimurtha@gmail.com")
@@ -161,12 +158,61 @@ async def meuid(update: Update, context):
 
 
 # -------------------------
-# DOWNLOAD + SHOPEE FINAL 2025
+# DOWNLOAD + SHOPEE PATCH ABSOLUTO
 # -------------------------
 async def baixar_video(update: Update, context):
     url = update.message.text.strip()
     uid = update.message.from_user.id
 
+    # -----------------------------------------------------------
+    # ✅ SHOPEE PATCH ABSOLUTO – executa antes de qualquer coisa
+    # -----------------------------------------------------------
+    from urllib.parse import unquote
+    import re
+
+    url = unquote(url).replace("\\/", "/").replace("\u200b", "").strip()
+
+    if "shopee.com" in url or "sv.shopee.com" in url:
+        try:
+            await update.message.reply_text("🔄 Resolvendo link da Shopee...")
+
+            # 1) Extrair o ID do share-video
+            m = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", url)
+
+            # fallback → HTML
+            if not m:
+                try:
+                    resp = requests.get(url, timeout=10)
+                    html = resp.text
+                    m = re.search(
+                        r"https://sv\.shopee\.com\.br/share-video/([A-Za-z0-9=_\-]+)",
+                        html
+                    )
+                except:
+                    pass
+
+            if not m:
+                return await update.message.reply_text("❌ Não consegui extrair o ID do vídeo da Shopee.")
+
+            share_id = m.group(1)
+
+            # 2) API oficial Shopee → retornar video_url
+            api_url = f"https://sv.shopee.com.br/api/v4/share/video?shareVideoId={share_id}"
+            data = requests.get(api_url, timeout=10).json()
+
+            video_url = data.get("data", {}).get("video_url")
+            if not video_url:
+                return await update.message.reply_text("❌ A Shopee não forneceu o video_url final.")
+
+            # ✅ URL final para o yt-dlp
+            url = video_url
+
+        except Exception as e:
+            return await update.message.reply_text(f"❌ Erro Shopee: {e}")
+
+    # -----------------------------------------------------------
+    # VALIDAÇÃO
+    # -----------------------------------------------------------
     if not url.startswith("http"):
         return await update.message.reply_text("❌ Envie um link válido.")
 
@@ -177,64 +223,9 @@ async def baixar_video(update: Update, context):
         if usos >= LIMITE_DIARIO:
             return await update.message.reply_text("⚠️ Limite diário atingido.")
 
-    # -------------------------------------------------------------------
-    # ✅ CORREÇÃO DEFINITIVA SHOPEE 2025
-    # universal-link -> decode -> share-video -> API -> video_url
-    # -------------------------------------------------------------------
-    if "shopee.com" in url or "sv.shopee.com" in url:
-        try:
-            await update.message.reply_text("🔄 Resolvendo link da Shopee...")
-
-            from urllib.parse import unquote
-            import re
-
-            # 1) Corrigir %3A%2F%2F
-            url = unquote(url)
-
-            # 2) Extrair ID do share-video
-            m = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", url)
-
-            if not m:
-                # fallback – buscar dentro do HTML
-                try:
-                    resp_html = requests.get(url, timeout=10)
-                    html = resp_html.text
-                    m = re.search(
-                        r"https://sv\.shopee\.com\.br/share-video/([A-Za-z0-9=_\-]+)",
-                        html
-                    )
-                except:
-                    pass
-
-            if not m:
-                return await update.message.reply_text(
-                    "❌ Não consegui extrair o ID do vídeo da Shopee."
-                )
-
-            share_id = m.group(1)
-
-            # 3) API OFICIAL Shopee que retorna video_url (único suportado)
-            api_url = f"https://sv.shopee.com.br/api/v4/share/video?shareVideoId={share_id}"
-
-            resp_api = requests.get(api_url, timeout=10)
-            data_api = resp_api.json()
-
-            video_url = data_api.get("data", {}).get("video_url")
-
-            if not video_url:
-                return await update.message.reply_text(
-                    "❌ A Shopee não forneceu o video_url (link final)."
-                )
-
-            # ✅ Agora sim: yt-dlp aceita
-            url = video_url
-
-        except Exception as e:
-            return await update.message.reply_text(f"❌ Erro ao resolver Shopee: {e}")
-
-    # -------------------------------------------------------------------
-    # ✅ DOWNLOAD FINAL
-    # -------------------------------------------------------------------
+    # -----------------------------------------------------------
+    # DOWNLOAD
+    # -----------------------------------------------------------
     await update.message.reply_text("⏳ Baixando...")
 
     try:
@@ -251,13 +242,12 @@ async def baixar_video(update: Update, context):
         if COOKIES_TIKTOK.exists():
             ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
 
-        def run(url):
+        def run_dl(url):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
                 return ydl.prepare_filename(info)
 
-        loop = asyncio.get_running_loop()
-        file_path = await loop.run_in_executor(None, lambda: run(url))
+        file_path = await asyncio.get_running_loop().run_in_executor(None, lambda: run_dl(url))
 
         with open(file_path, "rb") as f:
             await update.message.reply_video(f, caption="✅ Seu vídeo está aqui!")
@@ -283,8 +273,8 @@ def main():
 
     async def set_commands(app):
         await app.bot.set_my_commands([
-            BotCommand("start", "Iniciar bot"),
-            BotCommand("planos", "Planos premium"),
+            BotCommand("start", "Iniciar"),
+            BotCommand("planos", "Planos"),
             BotCommand("duvida", "Ajuda"),
             BotCommand("meuid", "Mostrar ID"),
         ])
