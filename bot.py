@@ -1,4 +1,4 @@
-# Jet TikTokShop Bot - Render + PTB20 Webhook Nativo + Shopee Extractor
+# Jet TikTokShop Bot - Render + PTB20 Webhook Nativo + Shopee Universal Extractor
 
 from telegram import (
     Update,
@@ -42,7 +42,6 @@ DOWNLOADS_DIR.mkdir(exist_ok=True)
 
 COOKIES_TIKTOK = SCRIPT_DIR / "cookies.txt"
 
-# Criar cookies se vierem via variável de ambiente
 if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
     with open(COOKIES_TIKTOK, "w") as f:
         f.write(os.environ["COOKIES_TIKTOK"])
@@ -139,13 +138,9 @@ async def get_shopee_video(url: str) -> str | None:
 # -------------------------
 async def start(update: Update, context):
     msg = (
-        "🎬 *Bem-vindo ao Jet TikTokShop Bot!*
-
-"
-        "👉 Envie o link do vídeo para baixar.
-"
-        "⚠️ Free: *10 vídeos por dia*
-"
+        "🎬 *Bem-vindo ao Jet TikTokShop Bot!*\n\n"
+        "👉 Envie o link do vídeo para baixar.\n"
+        "⚠️ Free: *10 vídeos por dia*\n"
         "💎 Premium: ilimitado"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
@@ -156,6 +151,7 @@ async def planos(update: Update, context):
         ("3 Meses", 25.90, "https://www.asaas.com/c/o9pg4uxrpgwnmqzd"),
         ("1 Ano", 89.90, "https://www.asaas.com/c/puto9coszhwgprqc"),
     ]
+
     kb = [[InlineKeyboardButton(f"💎 {d} - R$ {v}", url=u)] for d, v, u in planos]
     await update.message.reply_text("💎 Planos Premium:", reply_markup=InlineKeyboardMarkup(kb))
 
@@ -229,11 +225,3 @@ async def baixar_video(update: Update, context):
         }
 
         if COOKIES_TIKTOK.exists():
-            ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
-
-        def run(url):
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                data = ydl.extract_info(url, download=True)
-                return ydl.prepare_filename(data)
-
-                loop = asyncio.get_running_loop()
