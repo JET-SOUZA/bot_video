@@ -160,21 +160,71 @@ async def meuid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🆔 Seu ID: {update.message.from_user.id}")
 
 # ---------------------------------------------------------
-# DOWNLOAD + SHOPEE UNIVERSAL PATCH
-# ---------------------------------------------------------
-async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = update.message.text.strip()
-    uid = update.message.from_user.id
+    # ✅ PATCH SHOPEE UNIVERSAL COMPLETO
+    if "shopee.com" in url or "sv.shopee.com" in url:
+        await update.message.reply_text("🔄 Processando link da Shopee...")
 
-    if not url.startswith("http"):
-        return await update.message.reply_text("❌ Envie um link válido.")
+        try:
+            # 1) resolver universal-link → redir=
+            if "redir=" in url:
+                try:
+                    redir = re.search(r"redir=([^&]+)", url).group(1)
+                    url = unquote(redir)
+                except:
+                    pass
 
-    verificar_pagamentos_asaas()  # Premium automático
+            # 2) follow redirects
+            try:
+                r = requests.head(url, allow_redirects=True, timeout=10)
+                url = r.url
+            except:
+                pass
 
-    if uid not in USUARIOS_PREMIUM:
-        usos = verificar_limite(uid)
-        if usos >= LIMITE_DIARIO:
-            return await update.message.reply_text("⚠️ Limite diário atingido.")
+            # 3) tentar capturar share-video ID da URL
+            m = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", url)
+            if not m:
+                try:
+                    html = requests.get(url, timeout=10).text
+                    m = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", html)
+                except:
+                    pass
+
+            if not m:
+                return await update.message.reply_text("❌ Shopee: ID do vídeo não encontrado.")
+
+            share_id = m.group(1)
+
+            # 4) API oficial
+            api_url = f"https://sv.shopee.com.br/api/v4/share/video?shareVideoId={share_id}"
+            data = requests.get(api_url, timeout=10).json()
+
+            # 5) Extrair url por múltiplos caminhos
+            video_url = (
+                data.get("data", {}).get("play") or
+                data.get("data", {}).get("video_url") or
+                data.get("data", {}).get("url") or
+                (data.get("data", {}).get("videos", [{}])[0].get("url") if data.get("data", {}).get("videos") else None) or
+                data.get("data", {}).get("path")
+            )
+
+            # 6) fallback: extrair via HTML
+            if not video_url:
+                try:
+                    html = requests.get(url, timeout=10).text
+                    m = re.search(r"https://.*?\.mp4", html)
+                    if m:
+                        video_url = m.group(0)
+                except:
+                    pass
+
+            if not video_url:
+                return await update.message.reply_text("❌ Shopee não forneceu o MP4 (nem fallback funcionou).")
+
+            url = video_url
+
+        except Exception as e:
+            return await update.message.reply_text(f"❌ Erro Shopee: {e}")
+
 
     # ✅ PATCH SHOPEE COMPLETO
     if "shopee.com" in url or "sv.shopee.com" in url:
@@ -289,3 +339,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
