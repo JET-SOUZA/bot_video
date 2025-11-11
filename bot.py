@@ -68,7 +68,10 @@ def save_premium(users):
 # CHECK ASAAS
 # -------------------------
 
-def verificar_pagamentos_asaas():
+def if ASAAS_BASE_URL and ASAAS_API_KEY:
+        verificar_pagamentos_asaas()
+    else:
+        print("Asaas desativado (faltam variáveis ASAAS)."):
     try:
         url = f"{ASAAS_BASE_URL}/payments?status=CONFIRMED&limit=100"
         headers = {"access_token": ASAAS_API_KEY}
@@ -139,111 +142,77 @@ async def meuid(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # -------------------------
 
 async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("\n================ RAW UPDATE RECEBIDO ================")
-    try:
-        print(update.to_dict())
-    except:
-        print("ERRO AO IMPRIMIR UPDATE RAW")
-    print("===================================================\n")
-
-    if not update.message or not update.message.text:
-        return await update.message.reply_text("❌ Não consegui ler o link. Envie novamente.")
-
     url = update.message.text.strip()
     uid = update.message.from_user.id
-    original_url = url
-    url = unquote(url).replace("\\/", "/").replace("\u200b", "").strip()
 
-    print(f"URL ORIGINAL: {original_url}")
-    print(f"URL NORMALIZADA: {url}")
+    if not url.startswith("http"):
+        return await update.message.reply_text("❌ Envie um link válido.")
 
-    # -------------------------
-    # SHOPEE PATCH UNIVERSAL + SHARE-VIDEO + ENCURTADORES
-    # -------------------------
+    verificar_pagamentos_asaas()
+
+    if uid not in USUARIOS_PREMIUM:
+        usos = verificar_limite(uid)
+        if usos >= LIMITE_DIARIO:
+            return await update.message.reply_text("⚠️ Limite diário atingido.")
+
+    # ✅ PATCH SHOPEE UNIVERSAL COMPLETO
     if "shopee.com" in url or "sv.shopee.com" in url:
         await update.message.reply_text("🔄 Resolvendo link da Shopee...")
-
         try:
-            # 1) universal-link → extrair redir
             if "universal-link" in url and "redir=" in url:
                 try:
                     redir = re.search(r"redir=([^&]+)", url).group(1)
                     url = unquote(redir)
-                    print(f"[Shopee] UNIVERSAL-LINK RESOLVIDO → {url}")
-                except Exception as e:
-                    print("[Shopee] Erro extraindo redir:", e)
+                except:
+                    pass
 
-            # 2) resolve redirects (shp.ee etc)
             try:
                 r = requests.head(url, allow_redirects=True, timeout=10)
-                if r.url:
-                    print(f"[Shopee] Redirect final → {r.url}")
-                    url = r.url
+                url = r.url
             except:
                 pass
 
-            # 3) extrair share-video ID
             m = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", url)
-
-            # fallback: busca no HTML
             if not m:
                 try:
                     html = requests.get(url, timeout=10).text
                     m = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", html)
-                except Exception as e:
-                    print("[Shopee] Erro ao baixar HTML:", e)
+                except:
+                    pass
 
             if not m:
-                print("[Shopee] ID não encontrado")
                 return await update.message.reply_text("❌ Não consegui extrair o ID da Shopee.")
 
             share_id = m.group(1)
-            print(f"[Shopee] ID EXTRAÍDO = {share_id}")
-
-            # 5) API oficial
             api_url = f"https://sv.shopee.com.br/api/v4/share/video?shareVideoId={share_id}"
-            print(f"[Shopee] API URL → {api_url}")
-
             data = requests.get(api_url, timeout=10).json()
-            print("[Shopee] API JSON:", data)
 
             if "data" not in data or "play" not in data["data"]:
-                return await update.message.reply_text("❌ Shopee não retornou a URL de vídeo (play).")
+                return await update.message.reply_text("❌ Shopee não retornou o link direto.")
 
             url = data["data"]["play"]
-            print(f"[Shopee] PLAY URL FINAL → {url}")
 
         except Exception as e:
-            print("ERRO SHOPEE PATCH →", e)
             return await update.message.reply_text(f"❌ Erro Shopee: {e}")
-
-    print(f"URL FINAL PARA DOWNLOAD: {url}")
-
-    if not url.startswith("http"):
-        return await update.message.reply_text("❌ Link inválido.")
-
-    usos = verificar_limite(uid)
-    if usos >= LIMITE_DIARIO and uid not in USUARIOS_PREMIUM:
-        return await update.message.reply_text("⚠️ Limite diário atingido.")
 
     await update.message.reply_text("⏳ Baixando...")
 
-    # Download via yt-dlp
-    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    output = str(DOWNLOADS_DIR / f"%(id)s-{timestamp}.%(ext)s")
-    ydl_opts = {
-        "outtmpl": output,
-        "format": "bestvideo+bestaudio/best",
-        "merge_output_format": "mp4",
-    }
-
-    if COOKIES_TIKTOK.exists():
-        ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
-
     try:
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        output = str(DOWNLOADS_DIR / f"%(id)s-{timestamp}.%(ext)s")
+
+        ydl_opts = {
+            "outtmpl": output,
+            "format": "bestvideo+bestaudio/best",
+            "merge_output_format": "mp4",
+            "noplaylist": True,
+        }
+
+        if COOKIES_TIKTOK.exists():
+            ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
+
         def run(url):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                print("EXECUTANDO YT-DLP COM URL:", url)
                 info = ydl.extract_info(url, download=True)
                 return ydl.prepare_filename(info)
 
@@ -253,14 +222,13 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with open(file_path, "rb") as f:
             await update.message.reply_video(f, caption="✅ Seu vídeo está aqui!")
 
-        novo = incrementar_download(uid)
-        await update.message.reply_text(f"📊 Uso: {novo}/{LIMITE_DIARIO}")
-
         os.remove(file_path)
 
+        if uid not in USUARIOS_PREMIUM:
+            novo = incrementar_download(uid)
+            await update.message.reply_text(f"📊 Uso: {novo}/{LIMITE_DIARIO}")
+
     except Exception as e:
-        print(traceback.format_exc())
-        print("YT-DLP ERRO RAW:\n", traceback.format_exc())
         await update.message.reply_text(f"❌ Erro ao baixar: {e}")
 
 # -------------------------
