@@ -1,4 +1,4 @@
-# Jet TikTokShop Bot - Arquitetura C (Final Render+GitHub)
+# Jet TikTokShop Bot - Arquitetura C (Render + GitHub)
 # PTB20 Webhook + Asaas + Shopee Universal Patch + yt-dlp
 
 import os
@@ -16,8 +16,9 @@ from telegram.ext import Application, CommandHandler, MessageHandler, ContextTyp
 
 import yt_dlp
 
+
 # ---------------------------------------------------------
-# TOKEN (NOVO - compatível com Render)
+# TOKEN (COMPATÍVEL COM RENDER)
 # ---------------------------------------------------------
 TOKEN = (
     os.environ.get("TOKEN") or
@@ -27,9 +28,8 @@ TOKEN = (
 )
 
 if not TOKEN:
-    raise ValueError(
-        "Nenhum token encontrado. Defina TOKEN ou BOT_TOKEN no Render."
-    )
+    raise ValueError("Nenhum token encontrado. Configure TOKEN ou BOT_TOKEN no Render.")
+
 
 # ---------------------------------------------------------
 # CONFIGURAÇÃO
@@ -49,10 +49,10 @@ ARQUIVO_CONTADOR = SCRIPT_DIR / "downloads.json"
 ARQUIVO_PREMIUM = SCRIPT_DIR / "premium.json"
 COOKIES_TIKTOK = SCRIPT_DIR / "cookies.txt"
 
-# Criar cookies se vierem pelo Render
 if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
     with open(COOKIES_TIKTOK, "w") as f:
         f.write(os.environ["COOKIES_TIKTOK"])
+
 
 # ---------------------------------------------------------
 # JSON UTILS
@@ -63,9 +63,11 @@ def load_json(path):
             return json.load(f)
     return {}
 
+
 def save_json(path, data):
     with open(path, "w") as f:
         json.dump(data, f)
+
 
 # ---------------------------------------------------------
 # PREMIUM
@@ -74,27 +76,28 @@ def load_premium():
     data = load_json(ARQUIVO_PREMIUM)
     return set(map(int, data.get("premium_users", [])))
 
+
 def save_premium(users):
     save_json(ARQUIVO_PREMIUM, {"premium_users": list(users)})
+
 
 USUARIOS_PREMIUM = load_premium()
 USUARIOS_PREMIUM.add(ADMIN_ID)
 save_premium(USUARIOS_PREMIUM)
 
+
 # ---------------------------------------------------------
-# CHECK PAGAMENTOS ASAAS
+# ASAAS - PREMIUM AUTOMÁTICO
 # ---------------------------------------------------------
 def verificar_pagamentos_asaas():
     try:
         if not ASAAS_API_KEY:
-            print("Asaas desativado (sem API KEY).")
+            print("Asaas desativado (sem API KEY)")
             return
 
         url = f"{ASAAS_BASE_URL}/payments?status=CONFIRMED&limit=100"
         headers = {"access_token": ASAAS_API_KEY}
-
-        r = requests.get(url, headers=headers, timeout=10)
-        data = r.json()
+        data = requests.get(url, headers=headers, timeout=10).json()
 
         for p in data.get("data", []):
             if "metadata" in p and "telegram_id" in p["metadata"]:
@@ -105,6 +108,7 @@ def verificar_pagamentos_asaas():
 
     except Exception as e:
         print("Erro Asaas:", e)
+
 
 # ---------------------------------------------------------
 # LIMITE DIÁRIO
@@ -119,6 +123,7 @@ def verificar_limite(uid):
 
     return data[str(uid)]["downloads"]
 
+
 def incrementar_download(uid):
     data = load_json(ARQUIVO_CONTADOR)
     hoje = str(date.today())
@@ -131,108 +136,61 @@ def incrementar_download(uid):
     save_json(ARQUIVO_CONTADOR, data)
     return data[str(uid)]["downloads"]
 
+
 # ---------------------------------------------------------
 # COMANDOS
 # ---------------------------------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
-        "🎬 *Jet TikTokShop Bot*\n"
-        "\n"
+        "🎬 *Jet TikTokShop Bot*\n\n"
         "Envie um link para baixar vídeo.\n"
         "⚠️ Free: 10/dia\n"
         "💎 Premium: ilimitado"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
 
+
 async def planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    planos = [
-        ("1 Mês", 9.90, "https://www.asaas.com/c/knu5vub6ejc2yyja"),
-        ("3 Meses", 25.90, "https://www.asaas.com/c/o9pg4uxrpgwnmqzd"),
-        ("1 Ano", 89.90, "https://www.asaas.com/c/puto9coszhwgprqc"),
+    kb = [
+        [InlineKeyboardButton("💎 1 Mês – R$ 9,90", url="https://www.asaas.com/c/knu5vub6ejc2yyja")],
+        [InlineKeyboardButton("💎 3 Meses – R$ 25,90", url="https://www.asaas.com/c/o9pg4uxrpgwnmqzd")],
+        [InlineKeyboardButton("💎 1 Ano – R$ 89,90", url="https://www.asaas.com/c/puto9coszhwgprqc")],
     ]
-    kb = [[InlineKeyboardButton(f"💎 {d} – R$ {v}", url=u)] for d, v, u in planos]
     await update.message.reply_text("💎 Planos Premium:", reply_markup=InlineKeyboardMarkup(kb))
+
 
 async def duvida(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📞 Suporte: lavimurtha@gmail.com")
 
+
 async def meuid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🆔 Seu ID: {update.message.from_user.id}")
 
+
 # ---------------------------------------------------------
+# DOWNLOAD + PATCH SHOPEE
+# ---------------------------------------------------------
+async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = update.message.text.strip()
+    uid = update.message.from_user.id
+
+    if not url.startswith("http"):
+        return await update.message.reply_text("❌ Envie um link válido.")
+
+    verificar_pagamentos_asaas()
+
+    if uid not in USUARIOS_PREMIUM:
+        usos = verificar_limite(uid)
+        if usos >= LIMITE_DIARIO:
+            return await update.message.reply_text("⚠️ Limite diário atingido.")
+
     # ✅ PATCH SHOPEE UNIVERSAL COMPLETO
     if "shopee.com" in url or "sv.shopee.com" in url:
         await update.message.reply_text("🔄 Processando link da Shopee...")
 
         try:
-            # 1) resolver universal-link → redir=
-            if "redir=" in url:
-                try:
-                    redir = re.search(r"redir=([^&]+)", url).group(1)
-                    url = unquote(redir)
-                except:
-                    pass
-
-            # 2) follow redirects
-            try:
-                r = requests.head(url, allow_redirects=True, timeout=10)
-                url = r.url
-            except:
-                pass
-
-            # 3) tentar capturar share-video ID da URL
-            m = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", url)
-            if not m:
-                try:
-                    html = requests.get(url, timeout=10).text
-                    m = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", html)
-                except:
-                    pass
-
-            if not m:
-                return await update.message.reply_text("❌ Shopee: ID do vídeo não encontrado.")
-
-            share_id = m.group(1)
-
-            # 4) API oficial
-            api_url = f"https://sv.shopee.com.br/api/v4/share/video?shareVideoId={share_id}"
-            data = requests.get(api_url, timeout=10).json()
-
-            # 5) Extrair url por múltiplos caminhos
-            video_url = (
-                data.get("data", {}).get("play") or
-                data.get("data", {}).get("video_url") or
-                data.get("data", {}).get("url") or
-                (data.get("data", {}).get("videos", [{}])[0].get("url") if data.get("data", {}).get("videos") else None) or
-                data.get("data", {}).get("path")
-            )
-
-            # 6) fallback: extrair via HTML
-            if not video_url:
-                try:
-                    html = requests.get(url, timeout=10).text
-                    m = re.search(r"https://.*?\.mp4", html)
-                    if m:
-                        video_url = m.group(0)
-                except:
-                    pass
-
-            if not video_url:
-                return await update.message.reply_text("❌ Shopee não forneceu o MP4 (nem fallback funcionou).")
-
-            url = video_url
-
-        except Exception as e:
-            return await update.message.reply_text(f"❌ Erro Shopee: {e}")
-
-
-    # ✅ PATCH SHOPEE COMPLETO
-    if "shopee.com" in url or "sv.shopee.com" in url:
-        await update.message.reply_text("🔄 Processando link da Shopee...")
-
-        try:
             # universal-link redir=
-            if "universal-link" in url and "redir=" in url:
+            if "redir=" in url:
                 try:
                     redir = re.search(r"redir=([^&]+)", url).group(1)
                     url = unquote(redir)
@@ -253,21 +211,42 @@ async def meuid(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 m = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", html)
 
             if not m:
-                return await update.message.reply_text("❌ Não consegui extrair ID da Shopee.")
+                return await update.message.reply_text("❌ Shopee: ID do vídeo não encontrado.")
 
             share_id = m.group(1)
 
+            # API
             api_url = f"https://sv.shopee.com.br/api/v4/share/video?shareVideoId={share_id}"
             data = requests.get(api_url, timeout=10).json()
 
-            if "data" not in data or "play" not in data["data"]:
-                return await update.message.reply_text("❌ Shopee não retornou o MP4.")
+            # múltiplos formatos possíveis
+            video_url = (
+                data.get("data", {}).get("play") or
+                data.get("data", {}).get("video_url") or
+                data.get("data", {}).get("url") or
+                (data.get("data", {}).get("videos", [{}])[0].get("url")
+                 if data.get("data", {}).get("videos") else None) or
+                data.get("data", {}).get("path")
+            )
 
-            url = data["data"]["play"]
+            # fallback HTML
+            if not video_url:
+                html = requests.get(url, timeout=10).text
+                m = re.search(r"https://.*?\.mp4", html)
+                if m:
+                    video_url = m.group(0)
+
+            if not video_url:
+                return await update.message.reply_text("❌ Shopee não retornou vídeo MP4.")
+
+            url = video_url
 
         except Exception as e:
             return await update.message.reply_text(f"❌ Erro Shopee: {e}")
 
+    # ---------------------------------------------------------
+    # DOWNLOAD YT-DLP
+    # ---------------------------------------------------------
     await update.message.reply_text("⏳ Baixando...")
 
     try:
@@ -305,6 +284,7 @@ async def meuid(update: Update, context: ContextTypes.DEFAULT_TYPE):
         traceback.print_exc()
         await update.message.reply_text(f"❌ Erro ao baixar: {e}")
 
+
 # ---------------------------------------------------------
 # MAIN
 # ---------------------------------------------------------
@@ -339,4 +319,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
