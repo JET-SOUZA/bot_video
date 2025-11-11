@@ -1,5 +1,6 @@
 # Jet TikTokShop Bot - Arquitetura C (Render + GitHub)
 # PTB20 Webhook + Asaas + Shopee Universal Patch + yt-dlp
+# (Versão ajustada: extrator reforçado para br.shp.ee / universal-link / share-video / APIs)
 
 import os
 import json
@@ -161,101 +162,230 @@ async def meuid(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ---------------------------------------------------------
-# SHOPEE UNIVERSAL PATCH 2025 (FINAL)
+# SHOPEE UNIVERSAL PATCH 2025 (REFORÇADO)
 # ---------------------------------------------------------
 def extrair_video_shopee(url):
     """
-    PATCH UNIVERSAL 2025 — SUPORTA TODOS OS FORMATOS:
-    - br.shp.ee / shp.ee
-    - universal-link?redir=
-    - share-video/ID
-    - item/get (com vídeo interno)
-    - vídeos carregados via XHR no HTML
+    Extrator reforçado para Shopee:
+    - Resolve br.shp.ee (encurtadores) com GET e análise do HTML
+    - Suporta universal-link?redir= (decodifica)
+    - Extrai share-video ID e tenta múltiplas APIs:
+      /api/v4/share/get_post?postId=
+      /api/v4/item/get_video_info?postId=
+      /api/v4/share/video?shareVideoId=
+    - Faz buscas recursivas no JSON para encontrar URLs de mídia (.mp4 / .m3u8)
+    - Fallback para regex no HTML final
     """
-    import requests, re
-    from urllib.parse import unquote
+    from urllib.parse import unquote, urlparse, parse_qs
+    import time
+    HEADERS = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Accept": "text/html,application/json,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Referer": "https://shopee.com.br/"
+    }
 
-    # 1) Se contém redir=
-    if "redir=" in url:
-        try:
-            redir = re.search(r"redir=([^&]+)", url).group(1)
-            url = unquote(redir)
-        except:
-            pass
+    def find_media_in_obj(obj):
+        """Recursively procura por strings .mp4/.m3u8 em dicts/listas/strings"""
+        if isinstance(obj, str):
+            s = obj
+            m = re.search(r"https?://[^\s\"']+\.mp4[^\s\"']*", s)
+            if m:
+                return m.group(0)
+            m2 = re.search(r"https?://[^\s\"']+\.m3u8[^\s\"']*", s)
+            if m2:
+                return m2.group(0)
+            return None
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                res = find_media_in_obj(v)
+                if res:
+                    return res
+            return None
+        if isinstance(obj, list):
+            for v in obj:
+                res = find_media_in_obj(v)
+                if res:
+                    return res
+            return None
+        return None
 
-    # 2) Seguir redirecionamentos (GET — obrigatório para br.shp.ee)
+    # 1) if universal-link with redir parameter
     try:
-        r = requests.get(url, allow_redirects=True, timeout=12)
-        final = r.url
-        html_fallback = r.text
-        url = final
-    except:
-        html_fallback = ""
-
-    # 3) share-video ID
-    m = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", url) or \
-        re.search(r"/share-video/([A-Za-z0-9=_\-]+)", html_fallback)
-
-    if m:
-        share_id = m.group(1)
-        api_url = f"https://sv.shopee.com.br/api/v4/share/video?shareVideoId={share_id}"
-
-        try:
-            data = requests.get(api_url, timeout=10).json()
-        except:
-            data = {}
-
-        # múltiplos padrões possíveis
-        video_url = (
-            data.get("data", {}).get("play") or
-            data.get("data", {}).get("url") or
-            data.get("data", {}).get("video_url") or
-            data.get("data", {}).get("path") or
-            (data.get("data", {}).get("videos", [{}])[0].get("url")
-             if data.get("data", {}).get("videos") else None)
-        )
-
-        if video_url:
-            return video_url
-
-    # 4) Página /item (produto com vídeo interno)
-    try:
-        if "/item/" in url or "/item/get" in url:
-            txt = requests.get(url, timeout=12).text
-
-            mp4 = re.search(r"https://[^\"']+\.mp4", txt)
-            if mp4:
-                return mp4.group(0)
-
-            m3u8 = re.search(r"https://[^\"']+\.m3u8[^\"']*", txt)
-            if m3u8:
-                return m3u8.group(0)
-
-            js = re.search(r'"(play|url|play_url)"\s*:\s*"([^"]+)"', txt)
-            if js:
-                return js.group(2)
-    except:
+        if "redir=" in url:
+            # extract first redir param (works even if encoded twice)
+            q = re.search(r"redir=([^&]+)", url)
+            if q:
+                decoded = unquote(q.group(1))
+                # sometimes redir itself is encoded again
+                decoded2 = unquote(decoded)
+                url = decoded2
+    except Exception:
         pass
 
-    # 5) Fallback absoluto
-    txt = html_fallback
+    # 2) If shortener (shp.ee / br.shp.ee) do a GET and try to follow JS/meta redirects
+    html_fallback = ""
+    try:
+        if "shp.ee" in url:
+            r = requests.get(url, headers=HEADERS, allow_redirects=True, timeout=12)
+            url = r.url
+            html_fallback = r.text or ""
+            # If final URL still looks like a universal-link or contains redir, handle below
+    except Exception:
+        # try a simple HEAD as fallback
+        try:
+            r2 = requests.head(url, headers=HEADERS, allow_redirects=True, timeout=8)
+            url = r2.url
+        except Exception:
+            pass
 
-    mp4 = re.search(r"https://[^\"']+\.mp4", txt)
-    if mp4:
-        return mp4.group(0)
+    # 2b) If we still have HTML from earlier (or can GET), attempt to detect client-side redirect patterns
+    try:
+        if not html_fallback:
+            r = requests.get(url, headers=HEADERS, allow_redirects=True, timeout=10)
+            url = r.url
+            html_fallback = r.text or ""
+    except Exception:
+        pass
 
-    m3u8 = re.search(r"https://[^\"']+\.m3u8[^\"']*", txt)
-    if m3u8:
-        return m3u8.group(0)
+    # check meta refresh
+    try:
+        m_meta = re.search(r'<meta[^>]+http-equiv=["\']?refresh["\']?[^>]*content=["\']?\d+;\s*url=([^"\' >]+)', html_fallback, flags=re.I)
+        if m_meta:
+            url_candidate = unquote(m_meta.group(1))
+            url = url_candidate
+    except Exception:
+        pass
 
-    ju = re.search(r'"url":"(https:[^"]+)"', txt)
-    if ju:
-        return ju.group(1)
+    # check window.location / location.replace / location.href patterns
+    try:
+        m_js = re.search(r'location(?:\.href|\.replace)?\s*=\s*["\']([^"\']+)["\']', html_fallback)
+        if m_js:
+            url_candidate = unquote(m_js.group(1))
+            url = url_candidate
+    except Exception:
+        pass
 
-    jp = re.search(r'"play[^"]*":"(https:[^"]+)"', txt)
-    if jp:
-        return jp.group(1)
+    # check canonical link
+    try:
+        m_canon = re.search(r'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']+)["\']', html_fallback)
+        if m_canon:
+            url = m_canon.group(1)
+    except Exception:
+        pass
 
+    # 3) extract share-video id from url or html
+    share_match = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", url) or re.search(r"/share-video/([A-Za-z0-9=_\-]+)", html_fallback)
+    share_id = None
+    if share_match:
+        share_id = share_match.group(1)
+
+    # If share_id exists, try multiple APIs (with headers)
+    tried = []
+    if share_id:
+        api_candidates = [
+            f"https://sv.shopee.com.br/api/v4/share/get_post?postId={share_id}",
+            f"https://sv.shopee.com.br/api/v4/item/get_video_info?postId={share_id}",
+            f"https://sv.shopee.com.br/api/v4/share/video?shareVideoId={share_id}"
+        ]
+        for api_url in api_candidates:
+            try:
+                tried.append(api_url)
+                r = requests.get(api_url, headers=HEADERS, timeout=10)
+                # sometimes returns non-json with anti-bot; attempt safe parse
+                try:
+                    data = r.json()
+                except Exception:
+                    # if not json, maybe HTML — skip
+                    data = None
+                if data:
+                    # search for media in known places first
+                    candidates = []
+                    # common locations
+                    dd = data.get("data") if isinstance(data, dict) else None
+                    if isinstance(dd, dict):
+                        # mediaInfo
+                        mi = dd.get("mediaInfo") if dd.get("mediaInfo") else dd
+                        candidates.append(mi)
+                        candidates.append(dd)
+                    # also include whole JSON
+                    candidates.append(data)
+
+                    for c in candidates:
+                        v = find_media_in_obj(c)
+                        if v:
+                            return v
+            except Exception:
+                # ignore and try next
+                pass
+
+    # 4) If no share_id or APIs failed, attempt to search the HTML fallback for mp4/m3u8 or JSON fields
+    try:
+        # if we haven't already fetched html_fallback, try now
+        if not html_fallback:
+            r = requests.get(url, headers=HEADERS, allow_redirects=True, timeout=10)
+            html_fallback = r.text or ""
+            url = r.url
+    except Exception:
+        pass
+
+    # regex search in HTML
+    try:
+        # quick mp4
+        m_mp4 = re.search(r"https?://[^\s\"']+\.mp4[^\s\"']*", html_fallback)
+        if m_mp4:
+            return m_mp4.group(0)
+
+        # quick m3u8
+        m_m3 = re.search(r"https?://[^\s\"']+\.m3u8[^\s\"']*", html_fallback)
+        if m_m3:
+            return m_m3.group(0)
+
+        # JSON-like "play_url" / "play" / "url" fields
+        m_json_url = re.search(r'"(?:play_url|play|url|video_url)"\s*:\s*"([^"]+)"', html_fallback)
+        if m_json_url:
+            return m_json_url.group(1)
+
+        # sometimes there is an encoded JSON blob: data-state or __NEXT_DATA__
+        m_next = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.+?)</script>', html_fallback, flags=re.S)
+        if m_next:
+            try:
+                nd = json.loads(m_next.group(1))
+                found = find_media_in_obj(nd)
+                if found:
+                    return found
+            except Exception:
+                pass
+
+        # sometimes there's a data object in JS
+        m_jsobj = re.search(r'var\s+data\s*=\s*(\{.+?\});', html_fallback, flags=re.S)
+        if m_jsobj:
+            try:
+                obj = json.loads(m_jsobj.group(1))
+                found = find_media_in_obj(obj)
+                if found:
+                    return found
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # 5) Last-resort: try to build from share_id (some videos accessible via /api/v4/share/video)
+    if share_id:
+        try:
+            fallback_api = f"https://sv.shopee.com.br/api/v4/share/video?shareVideoId={share_id}"
+            r = requests.get(fallback_api, headers=HEADERS, timeout=10)
+            try:
+                data = r.json()
+            except Exception:
+                data = None
+            if data:
+                found = find_media_in_obj(data)
+                if found:
+                    return found
+        except Exception:
+            pass
+
+    # nothing found
     return None
 
 
@@ -282,7 +412,7 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         video_url = extrair_video_shopee(url)
 
         if not video_url:
-            return await update.message.reply_text("❌ Não foi possível obter o vídeo da Shopee.")
+            return await update.message.reply_text("❌ Não foi possível obter o vídeo da Shopee. (tente enviar o link longo ou mande o link br.shp.ee sem parâmetros)")
 
         url = video_url  # agora o yt-dlp baixa direto
 
