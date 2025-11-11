@@ -18,7 +18,7 @@ import yt_dlp
 
 
 # ---------------------------------------------------------
-# TOKEN (COMPATÍVEL COM RENDER — AUTOMÁTICO)
+# TOKEN (Render)
 # ---------------------------------------------------------
 TOKEN = (
     os.environ.get("TOKEN") or
@@ -28,11 +28,11 @@ TOKEN = (
 )
 
 if not TOKEN:
-    raise ValueError("Nenhum token encontrado. Configure TOKEN ou BOT_TOKEN no Render.")
+    raise ValueError("Nenhum token encontrado. Configure TOKEN no Render.")
 
 
 # ---------------------------------------------------------
-# CONFIGURAÇÃO
+# CONFIG
 # ---------------------------------------------------------
 ASAAS_API_KEY = os.environ.get("ASAAS_API_KEY")
 ASAAS_BASE_URL = "https://www.asaas.com/api/v3"
@@ -69,7 +69,7 @@ def save_json(path, data):
 
 
 # ---------------------------------------------------------
-# PREMIUM SYSTEM
+# PREMIUM
 # ---------------------------------------------------------
 def load_premium():
     data = load_json(ARQUIVO_PREMIUM)
@@ -89,7 +89,7 @@ save_premium(USUARIOS_PREMIUM)
 def verificar_pagamentos_asaas():
     try:
         if not ASAAS_API_KEY:
-            print("Asaas desativado (sem API KEY).")
+            print("Asaas desativado. Sem API KEY.")
             return
 
         url = f"{ASAAS_BASE_URL}/payments?status=CONFIRMED&limit=100"
@@ -108,7 +108,7 @@ def verificar_pagamentos_asaas():
 
 
 # ---------------------------------------------------------
-# LIMITE DIÁRIO SYSTEM
+# LIMITE DIÁRIO
 # ---------------------------------------------------------
 def verificar_limite(uid):
     data = load_json(ARQUIVO_CONTADOR)
@@ -134,17 +134,16 @@ def incrementar_download(uid):
 
 
 # ---------------------------------------------------------
-# COMANDOS /start /planos /duvida /meuid
+# COMANDOS
 # ---------------------------------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = (
+    await update.message.reply_text(
         "🎬 *Jet TikTokShop Bot*\n\n"
         "Envie um link para baixar vídeo.\n"
         "⚠️ Free: 10/dia\n"
-        "💎 Premium: ilimitado"
+        "💎 Premium: ilimitado",
+        parse_mode="Markdown"
     )
-    await update.message.reply_text(msg, parse_mode="Markdown")
-
 
 async def planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [
@@ -154,24 +153,29 @@ async def planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     await update.message.reply_text("💎 Planos Premium:", reply_markup=InlineKeyboardMarkup(kb))
 
-
 async def duvida(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📞 Suporte: lavimurtha@gmail.com")
-
 
 async def meuid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🆔 Seu ID: {update.message.from_user.id}")
 
 
 # ---------------------------------------------------------
-# SHOPEE UNIVERSAL PATCH (2025 — FINAL)
+# SHOPEE UNIVERSAL PATCH 2025 (FINAL)
 # ---------------------------------------------------------
 def extrair_video_shopee(url):
     """
-    Retorna o link final (MP4 ou M3U8) da Shopee.
+    PATCH UNIVERSAL 2025 — SUPORTA TODOS OS FORMATOS:
+    - br.shp.ee / shp.ee
+    - universal-link?redir=
+    - share-video/ID
+    - item/get (com vídeo interno)
+    - vídeos carregados via XHR no HTML
     """
+    import requests, re
+    from urllib.parse import unquote
 
-    # 1) universal-link -> redir=
+    # 1) Se contém redir=
     if "redir=" in url:
         try:
             redir = re.search(r"redir=([^&]+)", url).group(1)
@@ -179,69 +183,80 @@ def extrair_video_shopee(url):
         except:
             pass
 
-    # 2) seguir redirecionamentos
+    # 2) Seguir redirecionamentos (GET — obrigatório para br.shp.ee)
     try:
-        r = requests.head(url, allow_redirects=True, timeout=10)
-        url = r.url
+        r = requests.get(url, allow_redirects=True, timeout=12)
+        final = r.url
+        html_fallback = r.text
+        url = final
+    except:
+        html_fallback = ""
+
+    # 3) share-video ID
+    m = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", url) or \
+        re.search(r"/share-video/([A-Za-z0-9=_\-]+)", html_fallback)
+
+    if m:
+        share_id = m.group(1)
+        api_url = f"https://sv.shopee.com.br/api/v4/share/video?shareVideoId={share_id}"
+
+        try:
+            data = requests.get(api_url, timeout=10).json()
+        except:
+            data = {}
+
+        # múltiplos padrões possíveis
+        video_url = (
+            data.get("data", {}).get("play") or
+            data.get("data", {}).get("url") or
+            data.get("data", {}).get("video_url") or
+            data.get("data", {}).get("path") or
+            (data.get("data", {}).get("videos", [{}])[0].get("url")
+             if data.get("data", {}).get("videos") else None)
+        )
+
+        if video_url:
+            return video_url
+
+    # 4) Página /item (produto com vídeo interno)
+    try:
+        if "/item/" in url or "/item/get" in url:
+            txt = requests.get(url, timeout=12).text
+
+            mp4 = re.search(r"https://[^\"']+\.mp4", txt)
+            if mp4:
+                return mp4.group(0)
+
+            m3u8 = re.search(r"https://[^\"']+\.m3u8[^\"']*", txt)
+            if m3u8:
+                return m3u8.group(0)
+
+            js = re.search(r'"(play|url|play_url)"\s*:\s*"([^"]+)"', txt)
+            if js:
+                return js.group(2)
     except:
         pass
 
-    # 3) extrair share-video ID
-    m = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", url)
-    if not m:
-        try:
-            html = requests.get(url, timeout=10).text
-            m = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", html)
-        except:
-            pass
+    # 5) Fallback absoluto
+    txt = html_fallback
 
-    if not m:
-        return None
+    mp4 = re.search(r"https://[^\"']+\.mp4", txt)
+    if mp4:
+        return mp4.group(0)
 
-    share_id = m.group(1)
+    m3u8 = re.search(r"https://[^\"']+\.m3u8[^\"']*", txt)
+    if m3u8:
+        return m3u8.group(0)
 
-    # 4) tentar API (muitos vídeos novos retornam error_not_found)
-    api_url = f"https://sv.shopee.com.br/api/v4/share/video?shareVideoId={share_id}"
-    try:
-        data = requests.get(api_url, timeout=10).json()
-    except:
-        data = {}
+    ju = re.search(r'"url":"(https:[^"]+)"', txt)
+    if ju:
+        return ju.group(1)
 
-    # 5) tentar todas as chaves possíveis da API
-    video_url = (
-        data.get("data", {}).get("play") or
-        data.get("data", {}).get("video_url") or
-        data.get("data", {}).get("url") or
-        (data.get("data", {}).get("videos", [{}])[0].get("url")
-         if data.get("data", {}).get("videos") else None) or
-        data.get("data", {}).get("path")
-    )
+    jp = re.search(r'"play[^"]*":"(https:[^"]+)"', txt)
+    if jp:
+        return jp.group(1)
 
-    # 6) fallback: extrair direto do HTML (novo formato Shopee)
-    if not video_url:
-        html = requests.get(url, timeout=10).text
-
-        # MP4 direto
-        mp4 = re.search(r"https://[^\"']+\.mp4", html)
-        if mp4:
-            return mp4.group(0)
-
-        # M3U8 direto
-        m3u8 = re.search(r"https://[^\"']+\.m3u8[^\"']*", html)
-        if m3u8:
-            return m3u8.group(0)
-
-        # JSON "url": "https://..."
-        json_url = re.search(r'"url":"(https:[^"]+)"', html)
-        if json_url:
-            return json_url.group(1)
-
-        # JSON "play_url": "https://..."
-        json_play = re.search(r'"play[^"]*":"(https:[^"]+)"', html)
-        if json_play:
-            return json_play.group(1)
-
-    return video_url
+    return None
 
 
 # ---------------------------------------------------------
@@ -261,19 +276,17 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if usos >= LIMITE_DIARIO:
             return await update.message.reply_text("⚠️ Limite diário atingido.")
 
-    # ✅ Shopee Patch
-    if "shopee.com" in url or "sv.shopee.com" in url:
+    # Patch Shopee
+    if "shopee.com" in url or "shp.ee" in url or "sv.shopee.com" in url:
         await update.message.reply_text("🔄 Processando link da Shopee...")
         video_url = extrair_video_shopee(url)
 
         if not video_url:
             return await update.message.reply_text("❌ Não foi possível obter o vídeo da Shopee.")
 
-        url = video_url
+        url = video_url  # agora o yt-dlp baixa direto
 
-    # ---------------------------------------------------------
-    # Download com yt-dlp
-    # ---------------------------------------------------------
+    # ----------- yt-dlp ----------------------------------
     await update.message.reply_text("⏳ Baixando...")
 
     try:
