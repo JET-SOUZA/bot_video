@@ -1,4 +1,4 @@
-# Jet TikTokShop Bot - Arquitetura C (Final para GitHub)
+# Jet TikTokShop Bot - Arquitetura C (Final Render+GitHub)
 # PTB20 Webhook + Asaas + Shopee Universal Patch + yt-dlp
 
 import os
@@ -17,9 +17,23 @@ from telegram.ext import Application, CommandHandler, MessageHandler, ContextTyp
 import yt_dlp
 
 # ---------------------------------------------------------
+# TOKEN (NOVO - compatível com Render)
+# ---------------------------------------------------------
+TOKEN = (
+    os.environ.get("TOKEN") or
+    os.environ.get("BOT_TOKEN") or
+    os.environ.get("TELEGRAM_TOKEN") or
+    os.environ.get("TG_BOT_TOKEN")
+)
+
+if not TOKEN:
+    raise ValueError(
+        "Nenhum token encontrado. Defina TOKEN ou BOT_TOKEN no Render."
+    )
+
+# ---------------------------------------------------------
 # CONFIGURAÇÃO
 # ---------------------------------------------------------
-TOKEN = os.environ["TOKEN"]  # Seguro para GitHub
 ASAAS_API_KEY = os.environ.get("ASAAS_API_KEY")
 ASAAS_BASE_URL = "https://www.asaas.com/api/v3"
 
@@ -49,7 +63,6 @@ def load_json(path):
             return json.load(f)
     return {}
 
-
 def save_json(path, data):
     with open(path, "w") as f:
         json.dump(data, f)
@@ -61,17 +74,15 @@ def load_premium():
     data = load_json(ARQUIVO_PREMIUM)
     return set(map(int, data.get("premium_users", [])))
 
-
 def save_premium(users):
     save_json(ARQUIVO_PREMIUM, {"premium_users": list(users)})
-
 
 USUARIOS_PREMIUM = load_premium()
 USUARIOS_PREMIUM.add(ADMIN_ID)
 save_premium(USUARIOS_PREMIUM)
 
 # ---------------------------------------------------------
-# CHECK PAGAMENTOS ASAAS (Premium automático)
+# CHECK PAGAMENTOS ASAAS
 # ---------------------------------------------------------
 def verificar_pagamentos_asaas():
     try:
@@ -108,7 +119,6 @@ def verificar_limite(uid):
 
     return data[str(uid)]["downloads"]
 
-
 def incrementar_download(uid):
     data = load_json(ARQUIVO_CONTADOR)
     hoje = str(date.today())
@@ -134,24 +144,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
 
-
 async def planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     planos = [
         ("1 Mês", 9.90, "https://www.asaas.com/c/knu5vub6ejc2yyja"),
         ("3 Meses", 25.90, "https://www.asaas.com/c/o9pg4uxrpgwnmqzd"),
         ("1 Ano", 89.90, "https://www.asaas.com/c/puto9coszhwgprqc"),
     ]
-
     kb = [[InlineKeyboardButton(f"💎 {d} – R$ {v}", url=u)] for d, v, u in planos]
-
-    await update.message.reply_text(
-        "💎 Planos Premium:", reply_markup=InlineKeyboardMarkup(kb)
-    )
-
+    await update.message.reply_text("💎 Planos Premium:", reply_markup=InlineKeyboardMarkup(kb))
 
 async def duvida(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📞 Suporte: lavimurtha@gmail.com")
-
 
 async def meuid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🆔 Seu ID: {update.message.from_user.id}")
@@ -178,6 +181,7 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🔄 Processando link da Shopee...")
 
         try:
+            # universal-link redir=
             if "universal-link" in url and "redir=" in url:
                 try:
                     redir = re.search(r"redir=([^&]+)", url).group(1)
@@ -185,22 +189,21 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except:
                     pass
 
+            # follow redirects
             try:
                 r = requests.head(url, allow_redirects=True, timeout=10)
                 url = r.url
             except:
                 pass
 
-            m = re.search(r"/share-video/([A-Za-z0-9=_\\-]+)", url)
+            # extrair share-video id
+            m = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", url)
             if not m:
-                try:
-                    html = requests.get(url, timeout=10).text
-                    m = re.search(r"/share-video/([A-Za-z0-9=_\\-]+)", html)
-                except:
-                    pass
+                html = requests.get(url, timeout=10).text
+                m = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", html)
 
             if not m:
-                return await update.message.reply_text("❌ Não consegui extrair o ID da Shopee.")
+                return await update.message.reply_text("❌ Não consegui extrair ID da Shopee.")
 
             share_id = m.group(1)
 
@@ -208,7 +211,7 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data = requests.get(api_url, timeout=10).json()
 
             if "data" not in data or "play" not in data["data"]:
-                return await update.message.reply_text("❌ Shopee não retornou o link MP4.")
+                return await update.message.reply_text("❌ Shopee não retornou o MP4.")
 
             url = data["data"]["play"]
 
