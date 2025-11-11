@@ -21,7 +21,7 @@ import yt_dlp
 # ---------------------------------------------------------
 TOKEN = os.environ["TOKEN"]  # Seguro para GitHub
 ASAAS_API_KEY = os.environ.get("ASAAS_API_KEY")
-ASAAS_BASE_URL = "https://www.asaas.com/api/v3"  # Fixado (mesmo do bot original)
+ASAAS_BASE_URL = "https://www.asaas.com/api/v3"
 
 ADMIN_ID = 5593153639
 LIMITE_DIARIO = 10
@@ -126,13 +126,10 @@ def incrementar_download(uid):
 # ---------------------------------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
-        "🎬 *Jet TikTokShop Bot*
-
-"
-        "Envie um link para baixar vídeo.
-"
-        "⚠️ Free: 10/dia
-"
+        "🎬 *Jet TikTokShop Bot*\n"
+        "\n"
+        "Envie um link para baixar vídeo.\n"
+        "⚠️ Free: 10/dia\n"
         "💎 Premium: ilimitado"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
@@ -194,11 +191,11 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except:
                 pass
 
-            m = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", url)
+            m = re.search(r"/share-video/([A-Za-z0-9=_\\-]+)", url)
             if not m:
                 try:
                     html = requests.get(url, timeout=10).text
-                    m = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", html)
+                    m = re.search(r"/share-video/([A-Za-z0-9=_\\-]+)", html)
                 except:
                     pass
 
@@ -232,3 +229,60 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
 
         if COOKIES_TIKTOK.exists():
+            ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
+
+        def run(url):
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                return ydl.prepare_filename(info)
+
+        loop = asyncio.get_running_loop()
+        file_path = await loop.run_in_executor(None, lambda: run(url))
+
+        with open(file_path, "rb") as f:
+            await update.message.reply_video(f, caption="✅ Seu vídeo está aqui!")
+
+        os.remove(file_path)
+
+        if uid not in USUARIOS_PREMIUM:
+            novo = incrementar_download(uid)
+            await update.message.reply_text(f"📊 Uso: {novo}/{LIMITE_DIARIO}")
+
+    except Exception as e:
+        traceback.print_exc()
+        await update.message.reply_text(f"❌ Erro ao baixar: {e}")
+
+# ---------------------------------------------------------
+# MAIN
+# ---------------------------------------------------------
+def main():
+    verificar_pagamentos_asaas()
+
+    app = Application.builder().token(TOKEN).build()
+
+    async def set_commands(app):
+        await app.bot.set_my_commands([
+            BotCommand("start", "Iniciar bot"),
+            BotCommand("planos", "Planos premium"),
+            BotCommand("duvida", "Ajuda"),
+            BotCommand("meuid", "Mostrar ID"),
+        ])
+
+    app.post_init = set_commands
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("planos", planos))
+    app.add_handler(CommandHandler("duvida", duvida))
+    app.add_handler(CommandHandler("meuid", meuid))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
+
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path="webhook",
+        webhook_url=f"https://{os.environ['RENDER_EXTERNAL_HOSTNAME']}/webhook"
+    )
+
+
+if __name__ == "__main__":
+    main()
