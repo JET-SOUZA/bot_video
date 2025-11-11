@@ -1,6 +1,5 @@
 # Jet TikTokShop Bot - Arquitetura C (Render + GitHub)
 # PTB20 Webhook + Asaas + Shopee Universal Patch + yt-dlp
-# (Versão ajustada: extrator reforçado para br.shp.ee / universal-link / share-video / APIs)
 
 import os
 import json
@@ -166,18 +165,11 @@ async def meuid(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------------------------------------------------------
 def extrair_video_shopee(url):
     """
-    Extrator reforçado para Shopee:
-    - Resolve br.shp.ee (encurtadores) com GET e análise do HTML
-    - Suporta universal-link?redir= (decodifica)
-    - Extrai share-video ID e tenta múltiplas APIs:
-      /api/v4/share/get_post?postId=
-      /api/v4/item/get_video_info?postId=
-      /api/v4/share/video?shareVideoId=
-    - Faz buscas recursivas no JSON para encontrar URLs de mídia (.mp4 / .m3u8)
-    - Fallback para regex no HTML final
+    Extrator reforçado para Shopee — compatível com br.shp.ee, universal-link,
+    share-video, APIs internas e JSONs inline (__NEXT_DATA__ / __STORE__).
     """
-    from urllib.parse import unquote, urlparse, parse_qs
-    import time
+    from urllib.parse import unquote
+
     HEADERS = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
         "Accept": "text/html,application/json,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -185,7 +177,7 @@ def extrair_video_shopee(url):
     }
 
     def find_media_in_obj(obj):
-        """Recursively procura por strings .mp4/.m3u8 em dicts/listas/strings"""
+        """Recursively procura por .mp4 / .m3u8 em dicts/listas/strings"""
         if isinstance(obj, str):
             s = obj
             m = re.search(r"https?://[^\s\"']+\.mp4[^\s\"']*", s)
@@ -209,36 +201,33 @@ def extrair_video_shopee(url):
             return None
         return None
 
-    # 1) if universal-link with redir parameter
+    # 1) universal-link redir
     try:
         if "redir=" in url:
-            # extract first redir param (works even if encoded twice)
             q = re.search(r"redir=([^&]+)", url)
             if q:
                 decoded = unquote(q.group(1))
-                # sometimes redir itself is encoded again
                 decoded2 = unquote(decoded)
                 url = decoded2
     except Exception:
         pass
 
-    # 2) If shortener (shp.ee / br.shp.ee) do a GET and try to follow JS/meta redirects
     html_fallback = ""
+
+    # 2) shortener shp.ee -> GET follow
     try:
         if "shp.ee" in url:
             r = requests.get(url, headers=HEADERS, allow_redirects=True, timeout=12)
             url = r.url
             html_fallback = r.text or ""
-            # If final URL still looks like a universal-link or contains redir, handle below
     except Exception:
-        # try a simple HEAD as fallback
         try:
             r2 = requests.head(url, headers=HEADERS, allow_redirects=True, timeout=8)
             url = r2.url
         except Exception:
             pass
 
-    # 2b) If we still have HTML from earlier (or can GET), attempt to detect client-side redirect patterns
+    # 2b) ensure we have HTML
     try:
         if not html_fallback:
             r = requests.get(url, headers=HEADERS, allow_redirects=True, timeout=10)
@@ -247,7 +236,7 @@ def extrair_video_shopee(url):
     except Exception:
         pass
 
-    # check meta refresh
+    # meta/js/canonical redirects
     try:
         m_meta = re.search(r'<meta[^>]+http-equiv=["\']?refresh["\']?[^>]*content=["\']?\d+;\s*url=([^"\' >]+)', html_fallback, flags=re.I)
         if m_meta:
@@ -256,7 +245,6 @@ def extrair_video_shopee(url):
     except Exception:
         pass
 
-    # check window.location / location.replace / location.href patterns
     try:
         m_js = re.search(r'location(?:\.href|\.replace)?\s*=\s*["\']([^"\']+)["\']', html_fallback)
         if m_js:
@@ -265,7 +253,6 @@ def extrair_video_shopee(url):
     except Exception:
         pass
 
-    # check canonical link
     try:
         m_canon = re.search(r'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']+)["\']', html_fallback)
         if m_canon:
@@ -273,13 +260,13 @@ def extrair_video_shopee(url):
     except Exception:
         pass
 
-    # 3) extract share-video id from url or html
+    # 3) extract share-video id
     share_match = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", url) or re.search(r"/share-video/([A-Za-z0-9=_\-]+)", html_fallback)
     share_id = None
     if share_match:
         share_id = share_match.group(1)
 
-    # If share_id exists, try multiple APIs (with headers)
+    # 4) try APIs if share_id
     tried = []
     if share_id:
         api_candidates = [
@@ -291,23 +278,17 @@ def extrair_video_shopee(url):
             try:
                 tried.append(api_url)
                 r = requests.get(api_url, headers=HEADERS, timeout=10)
-                # sometimes returns non-json with anti-bot; attempt safe parse
                 try:
                     data = r.json()
                 except Exception:
-                    # if not json, maybe HTML — skip
                     data = None
                 if data:
-                    # search for media in known places first
-                    candidates = []
-                    # common locations
                     dd = data.get("data") if isinstance(data, dict) else None
+                    candidates = []
                     if isinstance(dd, dict):
-                        # mediaInfo
                         mi = dd.get("mediaInfo") if dd.get("mediaInfo") else dd
                         candidates.append(mi)
                         candidates.append(dd)
-                    # also include whole JSON
                     candidates.append(data)
 
                     for c in candidates:
@@ -315,12 +296,10 @@ def extrair_video_shopee(url):
                         if v:
                             return v
             except Exception:
-                # ignore and try next
                 pass
 
-    # 4) If no share_id or APIs failed, attempt to search the HTML fallback for mp4/m3u8 or JSON fields
+    # 5) try to parse __NEXT_DATA__ or __STORE__ in HTML
     try:
-        # if we haven't already fetched html_fallback, try now
         if not html_fallback:
             r = requests.get(url, headers=HEADERS, allow_redirects=True, timeout=10)
             html_fallback = r.text or ""
@@ -328,24 +307,7 @@ def extrair_video_shopee(url):
     except Exception:
         pass
 
-    # regex search in HTML
     try:
-        # quick mp4
-        m_mp4 = re.search(r"https?://[^\s\"']+\.mp4[^\s\"']*", html_fallback)
-        if m_mp4:
-            return m_mp4.group(0)
-
-        # quick m3u8
-        m_m3 = re.search(r"https?://[^\s\"']+\.m3u8[^\s\"']*", html_fallback)
-        if m_m3:
-            return m_m3.group(0)
-
-        # JSON-like "play_url" / "play" / "url" fields
-        m_json_url = re.search(r'"(?:play_url|play|url|video_url)"\s*:\s*"([^"]+)"', html_fallback)
-        if m_json_url:
-            return m_json_url.group(1)
-
-        # sometimes there is an encoded JSON blob: data-state or __NEXT_DATA__
         m_next = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.+?)</script>', html_fallback, flags=re.S)
         if m_next:
             try:
@@ -355,21 +317,77 @@ def extrair_video_shopee(url):
                     return found
             except Exception:
                 pass
+    except Exception:
+        pass
 
-        # sometimes there's a data object in JS
-        m_jsobj = re.search(r'var\s+data\s*=\s*(\{.+?\});', html_fallback, flags=re.S)
-        if m_jsobj:
+    try:
+        # __STORE__ pattern (Shopee may use different global names)
+        m_store = re.search(r'__STORE__\s*=\s*({.+?})\s*</script>', html_fallback, flags=re.S)
+        if m_store:
             try:
-                obj = json.loads(m_jsobj.group(1))
-                found = find_media_in_obj(obj)
-                if found:
-                    return found
+                raw = m_store.group(1)
+                # attempt to load by fixing quotes
+                obj = None
+                try:
+                    obj = json.loads(raw)
+                except Exception:
+                    # try to unescape and then load
+                    try:
+                        decoded = raw.encode("utf-8").decode("unicode_escape")
+                        obj = json.loads(decoded)
+                    except Exception:
+                        obj = None
+                if obj:
+                    found = find_media_in_obj(obj)
+                    if found:
+                        return found
             except Exception:
                 pass
     except Exception:
         pass
 
-    # 5) Last-resort: try to build from share_id (some videos accessible via /api/v4/share/video)
+    # 6) item page specific searches
+    try:
+        if "/item/" in url or "/item/get" in url:
+            # video_info_list JSON
+            m_vidlist = re.search(r'"video_info_list"\s*:\s*\[(.*?)\]', html_fallback, flags=re.S)
+            if m_vidlist:
+                try:
+                    content = m_vidlist.group(1)
+                    # wrap in array and try load
+                    arr = json.loads("[" + content + "]")
+                    found = find_media_in_obj(arr)
+                    if found:
+                        return found
+                except Exception:
+                    pass
+
+            mp4 = re.search(r'https?://[^"']+\.mp4', html_fallback)
+            if mp4:
+                return mp4.group(0)
+
+            m3u8 = re.search(r'https?://[^"']+\.m3u8[^"']*', html_fallback)
+            if m3u8:
+                return m3u8.group(0)
+    except Exception:
+        pass
+
+    # 7) generic fallbacks
+    try:
+        mp4 = re.search(r'https?://[^"']+\.mp4', html_fallback)
+        if mp4:
+            return mp4.group(0)
+        m3u8 = re.search(r'https?://[^"']+\.m3u8[^"']*', html_fallback)
+        if m3u8:
+            return m3u8.group(0)
+
+        m_json_url = re.search(r'"(?:play_url|play|url|video_url)"\s*:\s*"([^"]+)"', html_fallback)
+        if m_json_url:
+            return m_json_url.group(1)
+    except Exception:
+        pass
+
+    # 8) last resort: try fallback API one more time
     if share_id:
         try:
             fallback_api = f"https://sv.shopee.com.br/api/v4/share/video?shareVideoId={share_id}"
@@ -385,7 +403,6 @@ def extrair_video_shopee(url):
         except Exception:
             pass
 
-    # nothing found
     return None
 
 
