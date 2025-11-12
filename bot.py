@@ -1,6 +1,6 @@
 # Jet TikTokShop Bot - Arquitetura C (Render + GitHub)
 # PTB20 Webhook + Asaas + Shopee Universal Patch + yt-dlp
-# Atualização 2025-11: fixes mobile streaming (faststart + streaming flag) + premium
+# Atualização 2025-11: addpremium/delpremium + menu admin + mobile fix
 
 import os
 import json
@@ -14,6 +14,7 @@ import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 import yt_dlp
+import nest_asyncio
 
 # ---------------------------------------------------------
 # TOKEN (Render)
@@ -57,9 +58,11 @@ def load_json(path):
             return json.load(f)
     return {}
 
+
 def save_json(path, data):
     with open(path, "w") as f:
         json.dump(data, f)
+
 
 # ---------------------------------------------------------
 # PREMIUM
@@ -68,8 +71,10 @@ def load_premium():
     data = load_json(ARQUIVO_PREMIUM)
     return set(map(int, data.get("premium_users", [])))
 
+
 def save_premium(users):
     save_json(ARQUIVO_PREMIUM, {"premium_users": list(users)})
+
 
 USUARIOS_PREMIUM = load_premium()
 USUARIOS_PREMIUM.add(ADMIN_ID)
@@ -90,7 +95,7 @@ def verificar_pagamentos_asaas():
             if "metadata" in p and "telegram_id" in p["metadata"]:
                 uid = int(p["metadata"]["telegram_id"])
                 USUARIOS_PREMIUM.add(uid)
-                save_premium(USUARIOS_PREMIUM)
+        save_premium(USUARIOS_PREMIUM)
     except Exception as e:
         print("Erro Asaas:", e)
 
@@ -104,6 +109,7 @@ def verificar_limite(uid):
         data[str(uid)] = {"data": hoje, "downloads": 0}
         save_json(ARQUIVO_CONTADOR, data)
     return data[str(uid)]["downloads"]
+
 
 def incrementar_download(uid):
     data = load_json(ARQUIVO_CONTADOR)
@@ -137,6 +143,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
     await update.message.reply_text(texto, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(botoes))
 
+
 async def planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [
         [InlineKeyboardButton("💎 1 Mês – R$ 9,90", url="https://www.asaas.com/c/knu5vub6ejc2yyja")],
@@ -145,8 +152,10 @@ async def planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     await update.message.reply_text("💎 Planos Premium:", reply_markup=InlineKeyboardMarkup(kb))
 
+
 async def duvida(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📞 Suporte: lavimurtha@gmail.com")
+
 
 async def meuid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🆔 Seu ID: {update.message.from_user.id}")
@@ -163,6 +172,7 @@ async def addpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     USUARIOS_PREMIUM.add(uid)
     save_premium(USUARIOS_PREMIUM)
     await update.message.reply_text(f"✅ Usuário {uid} adicionado ao Premium!")
+
 
 async def delpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
@@ -193,6 +203,7 @@ def extrair_video_shopee(url):
             url = unquote(redir)
         except:
             pass
+
     m = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", url)
     if not m:
         try:
@@ -202,41 +213,39 @@ def extrair_video_shopee(url):
             pass
     if not m:
         return None
+
     share_id = m.group(1)
     api_url = f"https://sv.shopee.com.br/api/v4/share/video?shareVideoId={share_id}"
     try:
         data = requests.get(api_url, timeout=10).json()
     except:
         data = {}
+
     video_url = (
         data.get("data", {}).get("play")
         or data.get("data", {}).get("video_url")
         or data.get("data", {}).get("url")
-        or (data.get("data", {}).get("videos", [{}])[0].get("url")
-            if data.get("data", {}).get("videos") else None)
+        or (data.get("data", {}).get("videos", [{}])[0].get("url") if data.get("data", {}).get("videos") else None)
         or data.get("data", {}).get("path")
     )
     if not video_url:
         try:
             html = requests.get(url, timeout=10).text
-            mp4 = re.search(r"https?://[^\s\"']+\.mp4", html)
-            if mp4:
-                return mp4.group(0)
-            m3u8 = re.search(r"https?://[^\s\"']+\.m3u8[^\s\"']*", html)
-            if m3u8:
-                return m3u8.group(0)
-            json_url = re.search(r'"url":"(https:[^"]+)"', html)
-            if json_url:
-                return json_url.group(1)
-            json_play = re.search(r'"play[^"]*":"(https:[^"]+)"', html)
-            if json_play:
-                return json_play.group(1)
+            for regex in [
+                r"https?://[^\s\"']+\.mp4",
+                r"https?://[^\s\"']+\.m3u8[^\s\"']*",
+                r'"url":"(https:[^"]+)"',
+                r'"play[^"]*":"(https:[^"]+)"',
+            ]:
+                match = re.search(regex, html)
+                if match:
+                    return match.group(1) if len(match.groups()) else match.group(0)
         except:
             pass
     return video_url
 
 # ---------------------------------------------------------
-# DOWNLOAD HANDLER
+# DOWNLOAD HANDLER (com fix mobile)
 # ---------------------------------------------------------
 async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
@@ -260,18 +269,24 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         url = video_url
 
     await update.message.reply_text("⏳ Baixando...")
+
     try:
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         output = str(DOWNLOADS_DIR / f"%(id)s-{timestamp}.%(ext)s")
 
-        # Adiciona faststart para mp4 mobile-friendly
         ydl_opts = {
             "outtmpl": output,
             "format": "bestvideo+bestaudio/best",
             "merge_output_format": "mp4",
             "noplaylist": True,
-            "postprocessor_args": ["-movflags", "faststart"],  # <<-- chave para mobile
+            "postprocessors": [
+                {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"},
+                {"key": "FFmpegMetadata"},
+                {"key": "FFmpegVideoRemuxer", "preferedformat": "mp4"},
+            ],
+            "postprocessor_args": ["-movflags", "faststart"],  # ⚡ compatibilidade Telegram mobile
         }
+
         if COOKIES_TIKTOK.exists():
             ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
 
@@ -283,33 +298,15 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         loop = asyncio.get_running_loop()
         file_path = await loop.run_in_executor(None, lambda: run(url))
 
-        # Aguarda microtempo para o sistema de arquivos liberar o merge (reduz risco de arquivo truncado)
-        await asyncio.sleep(0.5)
-
-        # Garantir que o arquivo existe e tem tamanho razoável
-        if not os.path.exists(file_path) or os.path.getsize(file_path) < 1024:
-            # fallback: tenta enviar como documento se vídeo parece inválido
-            await update.message.reply_text("❌ Erro: arquivo final inválido ou muito pequeno.")
-            try:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-            except:
-                pass
-            return
-
-        # Envia explicitamente como video com streaming support (melhora reprodução mobile)
         with open(file_path, "rb") as f:
-            await update.message.reply_video(f, caption="✅ Seu vídeo está aqui!", supports_streaming=True)
+            await update.message.reply_video(f, caption="✅ Seu vídeo está aqui!")
 
-        # remove
-        try:
-            os.remove(file_path)
-        except:
-            pass
+        os.remove(file_path)
 
         if uid not in USUARIOS_PREMIUM:
             novo = incrementar_download(uid)
             await update.message.reply_text(f"📊 Uso: {novo}/{LIMITE_DIARIO}")
+
     except Exception as e:
         traceback.print_exc()
         await update.message.reply_text(f"❌ Erro ao baixar: {e}")
@@ -340,17 +337,17 @@ async def main():
     app.add_handler(CommandHandler("delpremium", delpremium))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
 
-    # run_webhook em PTB20 espera ser awaited
-    hostname = os.environ.get("RENDER_EXTERNAL_HOSTNAME") or os.environ.get("HOSTNAME") or f"localhost:{PORT}"
-    webhook_url = f"https://{hostname}/webhook"
-    print(f"Iniciando bot (webhook) na porta {PORT}, webhook_url={webhook_url}")
-
+    print(f"Iniciando bot (webhook) na porta {PORT}...")
     await app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
         url_path="webhook",
-        webhook_url=webhook_url
+        webhook_url=f"https://{os.environ['RENDER_EXTERNAL_HOSTNAME']}/webhook",
     )
 
+# ---------------------------------------------------------
+# EXECUÇÃO SEGURA PARA RENDER
+# ---------------------------------------------------------
 if __name__ == "__main__":
-    asyncio.run(main())
+    nest_asyncio.apply()
+    asyncio.get_event_loop().run_until_complete(main())
