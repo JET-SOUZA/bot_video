@@ -1,6 +1,6 @@
 # Jet TikTokShop Bot - Arquitetura C (Render + GitHub)
-# PTB20 Webhook + Asaas + Shopee Universal Patch + yt-dlp
-# Atualização 2025-11: addpremium/delpremium + menu admin + mobile fix (transcode fallback)
+# PTB20 Webhook + Asaas + Shopee Universal Patch + Instagram Reels + yt-dlp
+# Atualização 2025-11: addpremium/delpremium + menu admin + mobile fix + Instagram
 
 import os
 import json
@@ -11,7 +11,6 @@ from datetime import datetime, date
 from pathlib import Path
 from urllib.parse import unquote
 import re
-import subprocess
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 import yt_dlp
@@ -45,10 +44,15 @@ DOWNLOADS_DIR.mkdir(exist_ok=True)
 ARQUIVO_CONTADOR = SCRIPT_DIR / "downloads.json"
 ARQUIVO_PREMIUM = SCRIPT_DIR / "premium.json"
 COOKIES_TIKTOK = SCRIPT_DIR / "cookies.txt"
+COOKIES_INSTAGRAM = SCRIPT_DIR / "cookies_ig.txt"
 
 if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
     with open(COOKIES_TIKTOK, "w") as f:
         f.write(os.environ["COOKIES_TIKTOK"])
+
+if "COOKIES_INSTAGRAM" in os.environ and not COOKIES_INSTAGRAM.exists():
+    with open(COOKIES_INSTAGRAM, "w") as f:
+        f.write(os.environ["COOKIES_INSTAGRAM"])
 
 # ---------------------------------------------------------
 # JSON UTILS
@@ -209,13 +213,7 @@ def extrair_video_shopee(url):
     if not m:
         try:
             html = requests.get(url, timeout=10).text
-            for regex in [
-                r"/share-video/([A-Za-z0-9=_\-]+)",
-            ]:
-                mm = re.search(regex, html)
-                if mm:
-                    m = mm
-                    break
+            m = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", html)
         except:
             pass
     if not m:
@@ -252,42 +250,34 @@ def extrair_video_shopee(url):
     return video_url
 
 # ---------------------------------------------------------
-# HELPERS FFMPEG
+# INSTAGRAM PATCH 2025
 # ---------------------------------------------------------
-def ffmpeg_installed():
+def extrair_video_instagram(url):
+    """
+    Usa yt-dlp para baixar metadados e URL real do vídeo.
+    Suporta reels, feed, stories públicos e clipes.
+    """
     try:
-        subprocess.run(["ffmpeg", "-version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return True
-    except Exception:
-        return False
+        clean_url = url.split("?")[0]
+        ydl_opts = {
+            "quiet": True,
+            "skip_download": True,
+            "nocheckcertificate": True,
+            "format": "best[ext=mp4]/best",
+        }
 
-def transcode_to_h264_aac(input_path: str, output_path: str) -> bool:
-    """
-    Re-encode input_path to H.264 + AAC MP4 with faststart and fragmentation flags.
-    Returns True on success, False otherwise.
-    """
-    try:
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-i", input_path,
-            "-c:v", "libx264",
-            "-preset", "veryfast",
-            "-crf", "23",
-            "-c:a", "aac",
-            "-b:a", "128k",
-            "-movflags", "faststart+frag_keyframe+empty_moov",
-            "-vf", "scale='min(1920,iw)':'min(1920,ih)':force_original_aspect_ratio=decrease",
-            output_path
-        ]
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
-        return True
+        if COOKIES_INSTAGRAM.exists():
+            ydl_opts["cookiefile"] = str(COOKIES_INSTAGRAM)
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(clean_url, download=False)
+            return info.get("url") or info.get("requested_formats", [{}])[0].get("url")
     except Exception as e:
-        print("ffmpeg transcode error:", e)
-        return False
+        print("Erro ao extrair vídeo do Instagram:", e)
+        return None
 
 # ---------------------------------------------------------
-# DOWNLOAD HANDLER (com re-encode fallback)
+# DOWNLOAD HANDLER (com fix mobile)
 # ---------------------------------------------------------
 async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
@@ -303,107 +293,58 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if usos >= LIMITE_DIARIO:
             return await update.message.reply_text("⚠️ Limite diário atingido.")
 
+    # Shopee
     if "shopee.com" in url or "shp.ee" in url or "sv.shopee.com" in url:
         await update.message.reply_text("🔄 Processando link da Shopee...")
         video_url = extrair_video_shopee(url)
         if not video_url:
-            return await update.message.reply_text("❌ Não foi possível extrair vídeo.")
+            return await update.message.reply_text("❌ Não foi possível extrair vídeo da Shopee.")
+        url = video_url
+
+    # Instagram
+    elif any(x in url for x in ["instagram.com", "instagr.am", "ig.me"]):
+        await update.message.reply_text("🔄 Processando link do Instagram...")
+        video_url = extrair_video_instagram(url)
+        if not video_url:
+            return await update.message.reply_text("❌ Não foi possível extrair vídeo do Instagram (pode ser privado).")
         url = video_url
 
     await update.message.reply_text("⏳ Baixando...")
 
     try:
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        output_template = str(DOWNLOADS_DIR / f"%(id)s-{timestamp}.%(ext)s")
+        output = str(DOWNLOADS_DIR / f"%(id)s-{timestamp}.%(ext)s")
 
-        # Use minimal postprocessing in yt_dlp; we'll transcode proactively for IG/TikTok
         ydl_opts = {
-            "outtmpl": output_template,
+            "outtmpl": output,
             "format": "bestvideo+bestaudio/best",
             "merge_output_format": "mp4",
             "noplaylist": True,
-            # ensure ffmpeg tools used by yt_dlp for merging if available
+            "postprocessors": [
+                {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"},
+                {"key": "FFmpegMetadata"},
+                {"key": "FFmpegVideoRemuxer", "preferedformat": "mp4"},
+            ],
             "postprocessor_args": ["-movflags", "faststart"],
         }
 
         if COOKIES_TIKTOK.exists():
             ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
+        if "instagram" in url and COOKIES_INSTAGRAM.exists():
+            ydl_opts["cookiefile"] = str(COOKIES_INSTAGRAM)
 
-        def run_download(u):
+        def run(url):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(u, download=True)
-                # prepare_filename returns final path including ext
+                info = ydl.extract_info(url, download=True)
                 return ydl.prepare_filename(info)
 
         loop = asyncio.get_running_loop()
-        file_path = await loop.run_in_executor(None, lambda: run_download(url))
+        file_path = await loop.run_in_executor(None, lambda: run(url))
 
-        # tiny pause to let FS settle
-        await asyncio.sleep(0.3)
+        with open(file_path, "rb") as f:
+            await update.message.reply_video(f, caption="✅ Seu vídeo está aqui!")
 
-        if not os.path.exists(file_path) or os.path.getsize(file_path) < 1024:
-            await update.message.reply_text("❌ Erro: arquivo final inválido.")
-            try:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-            except:
-                pass
-            return
-
-        # Decide whether to transcode:
-        # Heuristic: if source is from instagram or tiktok, do re-encode to maximize iPhone compatibility.
-        needs_transcode = False
-        lower_url = url.lower()
-        if "instagram.com" in lower_url or "instagr.am" in lower_url or "tiktok.com" in lower_url or "vt.tiktok.com" in lower_url:
-            needs_transcode = True
-
-        final_path = file_path
-        transcoded_path = None
-
-        if needs_transcode and ffmpeg_installed():
-            # create transcoded filename
-            base = os.path.splitext(file_path)[0]
-            transcoded_path = f"{base}-h264.mp4"
-            success = await asyncio.get_running_loop().run_in_executor(None, lambda: transcode_to_h264_aac(file_path, transcoded_path))
-            if success and os.path.exists(transcoded_path) and os.path.getsize(transcoded_path) > 1024:
-                final_path = transcoded_path
-                # remove original to save space
-                try:
-                    os.remove(file_path)
-                except:
-                    pass
-            else:
-                # fallback: keep original
-                final_path = file_path
-                try:
-                    if transcoded_path and os.path.exists(transcoded_path):
-                        os.remove(transcoded_path)
-                except:
-                    pass
-
-        # Send as video with streaming support
-        try:
-            with open(final_path, "rb") as f:
-                await update.message.reply_video(f, caption="✅ Seu vídeo está aqui!", supports_streaming=True)
-        except Exception as e_send:
-            # If sending as video fails, try sending as document
-            print("Erro ao enviar como video, tentando enviar como documento:", e_send)
-            try:
-                with open(final_path, "rb") as f:
-                    await update.message.reply_document(f, caption="✅ Seu vídeo está aqui (document).")
-            except Exception as e_doc:
-                print("Erro ao enviar como documento:", e_doc)
-                await update.message.reply_text("❌ Falha ao enviar o arquivo. Tente novamente mais tarde.")
-                # don't delete files in this critical failure case; keep logs
-                return
-
-        # cleanup
-        try:
-            if final_path and os.path.exists(final_path):
-                os.remove(final_path)
-            # if transcoded created separately it was removed above or is same as final_path
-        except:
-            pass
+        os.remove(file_path)
 
         if uid not in USUARIOS_PREMIUM:
             novo = incrementar_download(uid)
