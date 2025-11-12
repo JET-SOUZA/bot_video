@@ -1,6 +1,6 @@
 # Jet TikTokShop Bot - Arquitetura C (Render + GitHub)
-# PTB20 Webhook + Asaas + Shopee Universal Patch + Instagram Reels + yt-dlp
-# Atualização 2025-11: addpremium/delpremium + menu admin + mobile fix + Instagram
+# PTB20 Webhook + Asaas + Shopee Universal Patch + Instagram Reels + YouTube + yt-dlp
+# Atualização 2025-11: addpremium/delpremium + menu admin + mobile fix + contador diário corrigido
 
 import os
 import json
@@ -105,24 +105,41 @@ def verificar_pagamentos_asaas():
         print("Erro Asaas:", e)
 
 # ---------------------------------------------------------
-# LIMITE DIÁRIO
+# LIMITE DIÁRIO (corrigido)
 # ---------------------------------------------------------
 def verificar_limite(uid):
     data = load_json(ARQUIVO_CONTADOR)
     hoje = str(date.today())
-    if str(uid) not in data or data[str(uid)]["data"] != hoje:
+
+    # cria estrutura se não existir
+    if str(uid) not in data:
         data[str(uid)] = {"data": hoje, "downloads": 0}
         save_json(ARQUIVO_CONTADOR, data)
+        return 0
+
+    # se for outro dia, zera o contador
+    if data[str(uid)]["data"] != hoje:
+        data[str(uid)]["data"] = hoje
+        data[str(uid)]["downloads"] = 0
+        save_json(ARQUIVO_CONTADOR, data)
+
     return data[str(uid)]["downloads"]
 
 
 def incrementar_download(uid):
     data = load_json(ARQUIVO_CONTADOR)
     hoje = str(date.today())
-    if str(uid) not in data or data[str(uid)]["data"] != hoje:
+
+    if str(uid) not in data:
         data[str(uid)] = {"data": hoje, "downloads": 1}
     else:
-        data[str(uid)]["downloads"] += 1
+        # se for novo dia, reinicia o contador
+        if data[str(uid)]["data"] != hoje:
+            data[str(uid)]["data"] = hoje
+            data[str(uid)]["downloads"] = 1
+        else:
+            data[str(uid)]["downloads"] += 1
+
     save_json(ARQUIVO_CONTADOR, data)
     return data[str(uid)]["downloads"]
 
@@ -253,10 +270,6 @@ def extrair_video_shopee(url):
 # INSTAGRAM PATCH 2025
 # ---------------------------------------------------------
 def extrair_video_instagram(url):
-    """
-    Usa yt-dlp para baixar metadados e URL real do vídeo.
-    Suporta reels, feed, stories públicos e clipes.
-    """
     try:
         clean_url = url.split("?")[0]
         ydl_opts = {
@@ -265,10 +278,8 @@ def extrair_video_instagram(url):
             "nocheckcertificate": True,
             "format": "best[ext=mp4]/best",
         }
-
         if COOKIES_INSTAGRAM.exists():
             ydl_opts["cookiefile"] = str(COOKIES_INSTAGRAM)
-
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(clean_url, download=False)
             return info.get("url") or info.get("requested_formats", [{}])[0].get("url")
@@ -277,7 +288,7 @@ def extrair_video_instagram(url):
         return None
 
 # ---------------------------------------------------------
-# DOWNLOAD HANDLER (com fix mobile)
+# DOWNLOAD HANDLER (TikTok, Shopee, Instagram, YouTube)
 # ---------------------------------------------------------
 async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
@@ -294,7 +305,7 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return await update.message.reply_text("⚠️ Limite diário atingido.")
 
     # Shopee
-    if "shopee.com" in url or "shp.ee" in url or "sv.shopee.com" in url:
+    if any(x in url for x in ["shopee.com", "shp.ee", "sv.shopee.com"]):
         await update.message.reply_text("🔄 Processando link da Shopee...")
         video_url = extrair_video_shopee(url)
         if not video_url:
