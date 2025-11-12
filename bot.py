@@ -1,6 +1,6 @@
 # Jet TikTokShop Bot - Arquitetura C (Render + GitHub)
 # PTB20 Webhook + Asaas + Shopee + Instagram + YouTube + yt-dlp
-# Atualização 2025-11: addpremium/delpremium + menu admin + mobile fix + Instagram + YouTube
+# Atualização 2025-11: suporte cookies YouTube + safe fallback
 
 import os
 import json
@@ -45,9 +45,11 @@ ARQUIVO_CONTADOR = SCRIPT_DIR / "downloads.json"
 ARQUIVO_PREMIUM = SCRIPT_DIR / "premium.json"
 COOKIES_TIKTOK = SCRIPT_DIR / "cookies.txt"
 COOKIES_INSTAGRAM = SCRIPT_DIR / "cookies_ig.txt"
-COOKIES_YOUTUBE = SCRIPT_DIR / "cookies_youtube.txt"
+COOKIES_YOUTUBE = SCRIPT_DIR / "cookies_yt.txt"
 
-# Cria cookies locais se existirem em variáveis de ambiente
+# ---------------------------------------------------------
+# COOKIES HANDLER
+# ---------------------------------------------------------
 if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
     with open(COOKIES_TIKTOK, "w") as f:
         f.write(os.environ["COOKIES_TIKTOK"])
@@ -252,7 +254,12 @@ def extrair_video_shopee(url):
 def extrair_video_instagram(url):
     try:
         clean_url = url.split("?")[0]
-        ydl_opts = {"quiet": True, "skip_download": True, "format": "best[ext=mp4]/best"}
+        ydl_opts = {
+            "quiet": True,
+            "skip_download": True,
+            "nocheckcertificate": True,
+            "format": "best[ext=mp4]/best",
+        }
         if COOKIES_INSTAGRAM.exists():
             ydl_opts["cookiefile"] = str(COOKIES_INSTAGRAM)
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -263,7 +270,7 @@ def extrair_video_instagram(url):
         return None
 
 # ---------------------------------------------------------
-# HANDLER DOWNLOAD (Shopee, Instagram, YouTube, TikTok)
+# DOWNLOAD HANDLER (com suporte YouTube)
 # ---------------------------------------------------------
 async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
@@ -278,8 +285,6 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         usos = verificar_limite(uid)
         if usos >= LIMITE_DIARIO:
             return await update.message.reply_text("⚠️ Limite diário atingido.")
-
-    cookies_file = None
 
     # Shopee
     if "shopee.com" in url or "shp.ee" in url or "sv.shopee.com" in url:
@@ -296,14 +301,6 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not video_url:
             return await update.message.reply_text("❌ Não foi possível extrair vídeo do Instagram (pode ser privado).")
         url = video_url
-        if COOKIES_INSTAGRAM.exists():
-            cookies_file = str(COOKIES_INSTAGRAM)
-
-    # YouTube
-    elif any(x in url for x in ["youtube.com", "youtu.be"]):
-        await update.message.reply_text("🔄 Processando link do YouTube...")
-        if COOKIES_YOUTUBE.exists():
-            cookies_file = str(COOKIES_YOUTUBE)
 
     await update.message.reply_text("⏳ Baixando...")
 
@@ -316,6 +313,7 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "format": "bestvideo+bestaudio/best",
             "merge_output_format": "mp4",
             "noplaylist": True,
+            "quiet": True,
             "postprocessors": [
                 {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"},
                 {"key": "FFmpegMetadata"},
@@ -324,8 +322,14 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "postprocessor_args": ["-movflags", "faststart"],
         }
 
-        if cookies_file:
-            ydl_opts["cookiefile"] = cookies_file
+        # cookies dinâmicos
+        if "youtube.com" in url or "youtu.be" in url:
+            if COOKIES_YOUTUBE.exists():
+                ydl_opts["cookiefile"] = str(COOKIES_YOUTUBE)
+        elif "instagram" in url and COOKIES_INSTAGRAM.exists():
+            ydl_opts["cookiefile"] = str(COOKIES_INSTAGRAM)
+        elif COOKIES_TIKTOK.exists():
+            ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
 
         def run(url):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
