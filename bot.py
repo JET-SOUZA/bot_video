@@ -1,6 +1,6 @@
 # Jet TikTokShop Bot - Arquitetura C (Render + GitHub)
 # PTB20 Webhook + Asaas + Shopee Universal Patch + yt-dlp
-# Atualização 2025-11: addpremium/delpremium + menu admin + mobile fix
+# Atualização 2025-11: addpremium/delpremium + menu admin + mobile fix (transcode fallback)
 
 import os
 import json
@@ -11,6 +11,7 @@ from datetime import datetime, date
 from pathlib import Path
 from urllib.parse import unquote
 import re
+import subprocess
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 import yt_dlp
@@ -208,7 +209,13 @@ def extrair_video_shopee(url):
     if not m:
         try:
             html = requests.get(url, timeout=10).text
-            m = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", html)
+            for regex in [
+                r"/share-video/([A-Za-z0-9=_\-]+)",
+            ]:
+                mm = re.search(regex, html)
+                if mm:
+                    m = mm
+                    break
         except:
             pass
     if not m:
@@ -245,7 +252,42 @@ def extrair_video_shopee(url):
     return video_url
 
 # ---------------------------------------------------------
-# DOWNLOAD HANDLER (com fix mobile)
+# HELPERS FFMPEG
+# ---------------------------------------------------------
+def ffmpeg_installed():
+    try:
+        subprocess.run(["ffmpeg", "-version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception:
+        return False
+
+def transcode_to_h264_aac(input_path: str, output_path: str) -> bool:
+    """
+    Re-encode input_path to H.264 + AAC MP4 with faststart and fragmentation flags.
+    Returns True on success, False otherwise.
+    """
+    try:
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i", input_path,
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-crf", "23",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-movflags", "faststart+frag_keyframe+empty_moov",
+            "-vf", "scale='min(1920,iw)':'min(1920,ih)':force_original_aspect_ratio=decrease",
+            output_path
+        ]
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+        return True
+    except Exception as e:
+        print("ffmpeg transcode error:", e)
+        return False
+
+# ---------------------------------------------------------
+# DOWNLOAD HANDLER (com re-encode fallback)
 # ---------------------------------------------------------
 async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
@@ -272,36 +314,96 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        output = str(DOWNLOADS_DIR / f"%(id)s-{timestamp}.%(ext)s")
+        output_template = str(DOWNLOADS_DIR / f"%(id)s-{timestamp}.%(ext)s")
 
+        # Use minimal postprocessing in yt_dlp; we'll transcode proactively for IG/TikTok
         ydl_opts = {
-            "outtmpl": output,
+            "outtmpl": output_template,
             "format": "bestvideo+bestaudio/best",
             "merge_output_format": "mp4",
             "noplaylist": True,
-            "postprocessors": [
-                {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"},
-                {"key": "FFmpegMetadata"},
-                {"key": "FFmpegVideoRemuxer", "preferedformat": "mp4"},
-            ],
-            "postprocessor_args": ["-movflags", "faststart"],  # ⚡ compatibilidade Telegram mobile
+            # ensure ffmpeg tools used by yt_dlp for merging if available
+            "postprocessor_args": ["-movflags", "faststart"],
         }
 
         if COOKIES_TIKTOK.exists():
             ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
 
-        def run(url):
+        def run_download(u):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
+                info = ydl.extract_info(u, download=True)
+                # prepare_filename returns final path including ext
                 return ydl.prepare_filename(info)
 
         loop = asyncio.get_running_loop()
-        file_path = await loop.run_in_executor(None, lambda: run(url))
+        file_path = await loop.run_in_executor(None, lambda: run_download(url))
 
-        with open(file_path, "rb") as f:
-            await update.message.reply_video(f, caption="✅ Seu vídeo está aqui!")
+        # tiny pause to let FS settle
+        await asyncio.sleep(0.3)
 
-        os.remove(file_path)
+        if not os.path.exists(file_path) or os.path.getsize(file_path) < 1024:
+            await update.message.reply_text("❌ Erro: arquivo final inválido.")
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+            except:
+                pass
+            return
+
+        # Decide whether to transcode:
+        # Heuristic: if source is from instagram or tiktok, do re-encode to maximize iPhone compatibility.
+        needs_transcode = False
+        lower_url = url.lower()
+        if "instagram.com" in lower_url or "instagr.am" in lower_url or "tiktok.com" in lower_url or "vt.tiktok.com" in lower_url:
+            needs_transcode = True
+
+        final_path = file_path
+        transcoded_path = None
+
+        if needs_transcode and ffmpeg_installed():
+            # create transcoded filename
+            base = os.path.splitext(file_path)[0]
+            transcoded_path = f"{base}-h264.mp4"
+            success = await asyncio.get_running_loop().run_in_executor(None, lambda: transcode_to_h264_aac(file_path, transcoded_path))
+            if success and os.path.exists(transcoded_path) and os.path.getsize(transcoded_path) > 1024:
+                final_path = transcoded_path
+                # remove original to save space
+                try:
+                    os.remove(file_path)
+                except:
+                    pass
+            else:
+                # fallback: keep original
+                final_path = file_path
+                try:
+                    if transcoded_path and os.path.exists(transcoded_path):
+                        os.remove(transcoded_path)
+                except:
+                    pass
+
+        # Send as video with streaming support
+        try:
+            with open(final_path, "rb") as f:
+                await update.message.reply_video(f, caption="✅ Seu vídeo está aqui!", supports_streaming=True)
+        except Exception as e_send:
+            # If sending as video fails, try sending as document
+            print("Erro ao enviar como video, tentando enviar como documento:", e_send)
+            try:
+                with open(final_path, "rb") as f:
+                    await update.message.reply_document(f, caption="✅ Seu vídeo está aqui (document).")
+            except Exception as e_doc:
+                print("Erro ao enviar como documento:", e_doc)
+                await update.message.reply_text("❌ Falha ao enviar o arquivo. Tente novamente mais tarde.")
+                # don't delete files in this critical failure case; keep logs
+                return
+
+        # cleanup
+        try:
+            if final_path and os.path.exists(final_path):
+                os.remove(final_path)
+            # if transcoded created separately it was removed above or is same as final_path
+        except:
+            pass
 
         if uid not in USUARIOS_PREMIUM:
             novo = incrementar_download(uid)
