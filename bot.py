@@ -1,6 +1,6 @@
 # Jet TikTokShop Bot - Arquitetura C (Render + GitHub)
 # PTB20 Webhook + Asaas + Shopee Universal Patch + yt-dlp
-# Atualização 2025-11: addpremium/delpremium + menu admin
+# Atualização 2025-11: fixes mobile streaming (faststart + streaming flag) + premium
 
 import os
 import json
@@ -263,11 +263,14 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         output = str(DOWNLOADS_DIR / f"%(id)s-{timestamp}.%(ext)s")
+
+        # Adiciona faststart para mp4 mobile-friendly
         ydl_opts = {
             "outtmpl": output,
             "format": "bestvideo+bestaudio/best",
             "merge_output_format": "mp4",
             "noplaylist": True,
+            "postprocessor_args": ["-movflags", "faststart"],  # <<-- chave para mobile
         }
         if COOKIES_TIKTOK.exists():
             ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
@@ -279,9 +282,30 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         loop = asyncio.get_running_loop()
         file_path = await loop.run_in_executor(None, lambda: run(url))
+
+        # Aguarda microtempo para o sistema de arquivos liberar o merge (reduz risco de arquivo truncado)
+        await asyncio.sleep(0.5)
+
+        # Garantir que o arquivo existe e tem tamanho razoável
+        if not os.path.exists(file_path) or os.path.getsize(file_path) < 1024:
+            # fallback: tenta enviar como documento se vídeo parece inválido
+            await update.message.reply_text("❌ Erro: arquivo final inválido ou muito pequeno.")
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+            except:
+                pass
+            return
+
+        # Envia explicitamente como video com streaming support (melhora reprodução mobile)
         with open(file_path, "rb") as f:
-            await update.message.reply_video(f, caption="✅ Seu vídeo está aqui!")
-        os.remove(file_path)
+            await update.message.reply_video(f, caption="✅ Seu vídeo está aqui!", supports_streaming=True)
+
+        # remove
+        try:
+            os.remove(file_path)
+        except:
+            pass
 
         if uid not in USUARIOS_PREMIUM:
             novo = incrementar_download(uid)
@@ -293,7 +317,7 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------------------------------------------------------
 # MAIN (WEBHOOK)
 # ---------------------------------------------------------
-def main():
+async def main():
     verificar_pagamentos_asaas()
     app = Application.builder().token(TOKEN).build()
 
@@ -316,12 +340,17 @@ def main():
     app.add_handler(CommandHandler("delpremium", delpremium))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
 
-    app.run_webhook(
+    # run_webhook em PTB20 espera ser awaited
+    hostname = os.environ.get("RENDER_EXTERNAL_HOSTNAME") or os.environ.get("HOSTNAME") or f"localhost:{PORT}"
+    webhook_url = f"https://{hostname}/webhook"
+    print(f"Iniciando bot (webhook) na porta {PORT}, webhook_url={webhook_url}")
+
+    await app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
         url_path="webhook",
-        webhook_url=f"https://{os.environ['RENDER_EXTERNAL_HOSTNAME']}/webhook"
+        webhook_url=webhook_url
     )
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
