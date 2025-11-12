@@ -1,6 +1,6 @@
 # Jet TikTokShop Bot - Arquitetura C (Render + GitHub)
-# PTB20 Webhook + Asaas + Shopee Universal Patch + Instagram Reels + yt-dlp
-# Atualização 2025-11: addpremium/delpremium + menu admin + mobile fix + Instagram
+# PTB20 Webhook + Asaas + Shopee + Instagram + YouTube + yt-dlp
+# Atualização 2025-11: addpremium/delpremium + menu admin + mobile fix + Instagram + YouTube
 
 import os
 import json
@@ -45,7 +45,9 @@ ARQUIVO_CONTADOR = SCRIPT_DIR / "downloads.json"
 ARQUIVO_PREMIUM = SCRIPT_DIR / "premium.json"
 COOKIES_TIKTOK = SCRIPT_DIR / "cookies.txt"
 COOKIES_INSTAGRAM = SCRIPT_DIR / "cookies_ig.txt"
+COOKIES_YOUTUBE = SCRIPT_DIR / "cookies_youtube.txt"
 
+# Cria cookies locais se existirem em variáveis de ambiente
 if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
     with open(COOKIES_TIKTOK, "w") as f:
         f.write(os.environ["COOKIES_TIKTOK"])
@@ -53,6 +55,10 @@ if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
 if "COOKIES_INSTAGRAM" in os.environ and not COOKIES_INSTAGRAM.exists():
     with open(COOKIES_INSTAGRAM, "w") as f:
         f.write(os.environ["COOKIES_INSTAGRAM"])
+
+if "COOKIES_YOUTUBE" in os.environ and not COOKIES_YOUTUBE.exists():
+    with open(COOKIES_YOUTUBE, "w") as f:
+        f.write(os.environ["COOKIES_YOUTUBE"])
 
 # ---------------------------------------------------------
 # JSON UTILS
@@ -63,11 +69,9 @@ def load_json(path):
             return json.load(f)
     return {}
 
-
 def save_json(path, data):
     with open(path, "w") as f:
         json.dump(data, f)
-
 
 # ---------------------------------------------------------
 # PREMIUM
@@ -76,10 +80,8 @@ def load_premium():
     data = load_json(ARQUIVO_PREMIUM)
     return set(map(int, data.get("premium_users", [])))
 
-
 def save_premium(users):
     save_json(ARQUIVO_PREMIUM, {"premium_users": list(users)})
-
 
 USUARIOS_PREMIUM = load_premium()
 USUARIOS_PREMIUM.add(ADMIN_ID)
@@ -115,7 +117,6 @@ def verificar_limite(uid):
         save_json(ARQUIVO_CONTADOR, data)
     return data[str(uid)]["downloads"]
 
-
 def incrementar_download(uid):
     data = load_json(ARQUIVO_CONTADOR)
     hoje = str(date.today())
@@ -148,7 +149,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
     await update.message.reply_text(texto, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(botoes))
 
-
 async def planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [
         [InlineKeyboardButton("💎 1 Mês – R$ 9,90", url="https://www.asaas.com/c/knu5vub6ejc2yyja")],
@@ -157,16 +157,14 @@ async def planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     await update.message.reply_text("💎 Planos Premium:", reply_markup=InlineKeyboardMarkup(kb))
 
-
 async def duvida(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📞 Suporte: lavimurtha@gmail.com")
-
 
 async def meuid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🆔 Seu ID: {update.message.from_user.id}")
 
 # ---------------------------------------------------------
-# ADMIN COMANDOS MANUAIS
+# ADMIN COMANDOS
 # ---------------------------------------------------------
 async def addpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
@@ -177,7 +175,6 @@ async def addpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     USUARIOS_PREMIUM.add(uid)
     save_premium(USUARIOS_PREMIUM)
     await update.message.reply_text(f"✅ Usuário {uid} adicionado ao Premium!")
-
 
 async def delpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
@@ -193,7 +190,7 @@ async def delpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Usuário não está no Premium.")
 
 # ---------------------------------------------------------
-# SHOPEE UNIVERSAL PATCH 2025
+# SHOPEE PATCH
 # ---------------------------------------------------------
 def extrair_video_shopee(url):
     if "br.shp.ee" in url or "shp.ee" in url:
@@ -250,25 +247,14 @@ def extrair_video_shopee(url):
     return video_url
 
 # ---------------------------------------------------------
-# INSTAGRAM PATCH 2025
+# INSTAGRAM PATCH
 # ---------------------------------------------------------
 def extrair_video_instagram(url):
-    """
-    Usa yt-dlp para baixar metadados e URL real do vídeo.
-    Suporta reels, feed, stories públicos e clipes.
-    """
     try:
         clean_url = url.split("?")[0]
-        ydl_opts = {
-            "quiet": True,
-            "skip_download": True,
-            "nocheckcertificate": True,
-            "format": "best[ext=mp4]/best",
-        }
-
+        ydl_opts = {"quiet": True, "skip_download": True, "format": "best[ext=mp4]/best"}
         if COOKIES_INSTAGRAM.exists():
             ydl_opts["cookiefile"] = str(COOKIES_INSTAGRAM)
-
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(clean_url, download=False)
             return info.get("url") or info.get("requested_formats", [{}])[0].get("url")
@@ -277,7 +263,7 @@ def extrair_video_instagram(url):
         return None
 
 # ---------------------------------------------------------
-# DOWNLOAD HANDLER (com fix mobile)
+# HANDLER DOWNLOAD (Shopee, Instagram, YouTube, TikTok)
 # ---------------------------------------------------------
 async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
@@ -292,6 +278,8 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         usos = verificar_limite(uid)
         if usos >= LIMITE_DIARIO:
             return await update.message.reply_text("⚠️ Limite diário atingido.")
+
+    cookies_file = None
 
     # Shopee
     if "shopee.com" in url or "shp.ee" in url or "sv.shopee.com" in url:
@@ -308,6 +296,14 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not video_url:
             return await update.message.reply_text("❌ Não foi possível extrair vídeo do Instagram (pode ser privado).")
         url = video_url
+        if COOKIES_INSTAGRAM.exists():
+            cookies_file = str(COOKIES_INSTAGRAM)
+
+    # YouTube
+    elif any(x in url for x in ["youtube.com", "youtu.be"]):
+        await update.message.reply_text("🔄 Processando link do YouTube...")
+        if COOKIES_YOUTUBE.exists():
+            cookies_file = str(COOKIES_YOUTUBE)
 
     await update.message.reply_text("⏳ Baixando...")
 
@@ -328,10 +324,8 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "postprocessor_args": ["-movflags", "faststart"],
         }
 
-        if COOKIES_TIKTOK.exists():
-            ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
-        if "instagram" in url and COOKIES_INSTAGRAM.exists():
-            ydl_opts["cookiefile"] = str(COOKIES_INSTAGRAM)
+        if cookies_file:
+            ydl_opts["cookiefile"] = cookies_file
 
         def run(url):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
