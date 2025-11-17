@@ -424,18 +424,21 @@ def extrair_video_shopee(url):
 
 
 # ---------------------------------------------------------
-# INSTAGRAM PATCH 2025
+# INSTAGRAM PATCH 2025 (corrigido para escolher stories)
 # ---------------------------------------------------------
-def extrair_video_instagram(url):
+def extrair_video_instagram(url, story_id=None, index=None, ultimo=False):
     """
     Extrai vídeo do Instagram (post ou story) usando yt-dlp e cookies.
     Funciona para contas públicas e privadas (com cookies válidos no Render).
+
+    Parâmetros adicionais:
+    - story_id: extrai story específico pelo ID
+    - index: extrai story pelo índice da lista do dia
+    - ultimo: extrai o último story do dia
     """
     try:
-        # Limpa a URL de query strings
         clean_url = url.split("?")[0]
 
-        # Opções do yt-dlp
         ydl_opts = {
             "quiet": True,
             "skip_download": True,
@@ -443,38 +446,125 @@ def extrair_video_instagram(url):
             "format": "best[ext=mp4]/best",
         }
 
-        # Usa cookies do Render (decodificado)
-        if not COOKIES_INSTAGRAM.exists() and "COOKIES_IG_B64" in os.environ:
-            try:
-                decoded = base64.b64decode(os.environ["COOKIES_IG_B64"]).decode("utf-8")
-                with open(COOKIES_INSTAGRAM, "w", encoding="utf-8") as f:
-                    f.write(decoded)
-                print("Cookies Instagram carregados do COOKIES_IG_B64 com sucesso!")
-            except Exception as e:
-                print("Erro ao decodificar COOKIES_IG_B64:", e)
-
         if COOKIES_INSTAGRAM.exists():
             ydl_opts["cookiefile"] = str(COOKIES_INSTAGRAM)
 
-        # Extrai info
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(clean_url, download=False)
 
-        # Retorna a URL direta do vídeo
+        # Caso seja post/IGTV
         if info.get("url"):
             return info.get("url")
         elif info.get("requested_formats"):
-            # Alguns stories/IGTV usam requested_formats
             return info["requested_formats"][0].get("url")
         elif info.get("entries"):
-            # Stories em lista
-            return info["entries"][0].get("url")
+            entries = info["entries"]
+
+            # Seleção por parâmetro
+            if story_id:
+                for e in entries:
+                    if e.get("id") == story_id:
+                        return e.get("url")
+            elif index is not None and 0 <= index < len(entries):
+                return entries[index].get("url")
+            elif ultimo:
+                return entries[-1].get("url")
+            else:
+                # Padrão: primeiro story
+                return entries[0].get("url")
         else:
             return None
 
     except Exception as e:
         print("Erro ao extrair vídeo do Instagram:", e)
         return None
+
+# ---------------------------------------------------------
+# HANDLER DE DOWNLOAD (corrigido para Instagram)
+# ---------------------------------------------------------
+async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = update.message.text.strip()
+    uid = update.message.from_user.id
+
+    if not url.startswith("http"):
+        return await update.message.reply_text("❌ Envie um link válido.")
+
+    verificar_pagamentos_asaas()
+
+    if not is_premium(uid):
+        usos = verificar_limite(uid)
+        if usos >= LIMITE_DIARIO:
+            return await update.message.reply_text("⚠️ Limite diário atingido.")
+
+    # Shopee
+    if any(x in url for x in ["shopee.com", "shp.ee", "sv.shopee.com"]):
+        await update.message.reply_text("🔄 Processando link da Shopee...")
+        video_url = extrair_video_shopee(url)
+        if not video_url:
+            return await update.message.reply_text("❌ Não foi possível extrair vídeo da Shopee.")
+        url = video_url
+
+    # Instagram
+    elif any(x in url for x in ["instagram.com", "instagr.am", "ig.me"]):
+        await update.message.reply_text("🔄 Processando link do Instagram...")
+        # exemplo: pegar o último story do dia
+        video_url = extrair_video_instagram(url, ultimo=True)
+        if not video_url:
+            return await update.message.reply_text(
+                "❌ Não foi possível extrair vídeo do Instagram (pode ser privado ou cookie inválido)."
+            )
+        url = video_url
+
+    await update.message.reply_text("⏳ Baixando...")
+
+    try:
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        output = str(DOWNLOADS_DIR / f"%(id)s-{timestamp}.%(ext)s")
+
+        ydl_opts = {
+            "outtmpl": output,
+            "format": "bestvideo+bestaudio/best",
+            "merge_output_format": "mp4",
+            "noplaylist": True,
+            "postprocessors": [
+                {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"},
+                {"key": "FFmpegMetadata"},
+                {"key": "FFmpegVideoRemuxer", "preferedformat": "mp4"},
+            ],
+            "postprocessor_args": ["-movflags", "faststart"],
+        }
+
+        if COOKIES_TIKTOK.exists():
+            ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
+        if "instagram" in url and COOKIES_INSTAGRAM.exists():
+            ydl_opts["cookiefile"] = str(COOKIES_INSTAGRAM)
+
+        def run(url_local):
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url_local, download=True)
+                return ydl.prepare_filename(info)
+
+        loop = asyncio.get_running_loop()
+        file_path = await loop.run_in_executor(None, lambda: run(url))
+
+        if os.path.exists(file_path):
+            with open(file_path, "rb") as f:
+                await update.message.reply_video(f, caption="✅ Seu vídeo está aqui!")
+            try:
+                os.remove(file_path)
+            except:
+                pass
+        else:
+            await update.message.reply_video(file_path, caption="✅ Seu vídeo está aqui!")
+
+        if not is_premium(uid):
+            novo = incrementar_download(uid)
+            await update.message.reply_text(f"📊 Uso: {novo}/{LIMITE_DIARIO}")
+
+    except Exception as e:
+        traceback.print_exc()
+        await update.message.reply_text(f"❌ Erro ao baixar: {e}")
+
 
 
 # ---------------------------------------------------------
@@ -652,4 +742,5 @@ if __name__ == "__main__":
     # evita RuntimeError: This event loop é já executando
     nest_asyncio.apply()
     asyncio.get_event_loop().run_until_complete(main())
+
 
