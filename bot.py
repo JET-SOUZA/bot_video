@@ -1,7 +1,7 @@
 # Jet TikTokShop Bot - Arquitetura C (Render + GitHub)
 # PTB20 Webhook + Asaas + Shopee Universal Patch + Instagram Reels + YouTube + yt-dlp
-# Atualização 2025-11: addpremium/delpremium + menu admin + mobile fix + contador diário corrigido
-# Revisado: cookies IG B64, keepalive Render, fix event loop, /verpremium
+# Atualização 2025-11: addpremium/delpremium + menu admin + mobile fix + contador diário corrigido + premium fixo/dinâmico
+# Revisado: cookies IG B64, keepalive Render, fix event loop, /verpremium detalhado
 
 import os
 import json
@@ -28,7 +28,7 @@ import yt_dlp
 import nest_asyncio
 
 # ---------------------------------------------------------
-# TOKEN (Render) - mantém compatibilidade com suas variáveis
+# CONFIGURAÇÕES
 # ---------------------------------------------------------
 TOKEN = (
     os.environ.get("TOKEN")
@@ -39,9 +39,6 @@ TOKEN = (
 if not TOKEN:
     raise ValueError("Nenhum token encontrado. Configure TOKEN ou BOT_TOKEN no Render.")
 
-# ---------------------------------------------------------
-# CONFIG
-# ---------------------------------------------------------
 ASAAS_API_KEY = os.environ.get("ASAAS_API_KEY")
 ASAAS_BASE_URL = "https://www.asaas.com/api/v3"
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "5593153639"))
@@ -53,18 +50,16 @@ DOWNLOADS_DIR = SCRIPT_DIR / "downloads"
 DOWNLOADS_DIR.mkdir(exist_ok=True)
 
 ARQUIVO_CONTADOR = SCRIPT_DIR / "downloads.json"
-ARQUIVO_PREMIUM = SCRIPT_DIR / "premium.json"  # backup file persistence
+ARQUIVO_PREMIUM = SCRIPT_DIR / "premium.json"
 COOKIES_TIKTOK = SCRIPT_DIR / "cookies.txt"
 COOKIES_INSTAGRAM = SCRIPT_DIR / "cookies_ig.txt"
 
-# If env has raw COOKIES_TIKTOK, write to file (preserve existing behavior)
+# Carregar cookies TikTok
 if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
     with open(COOKIES_TIKTOK, "w", encoding="utf-8") as f:
         f.write(os.environ["COOKIES_TIKTOK"])
 
-# Support two ways of providing Instagram cookies:
-# 1) COOKIES_IG_B64 (Base64 encoded content of cookies file) - recommended
-# 2) COOKIES_INSTAGRAM (raw cookie file content)
+# Carregar cookies Instagram Base64
 if "COOKIES_IG_B64" in os.environ:
     try:
         decoded = base64.b64decode(os.environ["COOKIES_IG_B64"]).decode("utf-8")
@@ -74,7 +69,7 @@ if "COOKIES_IG_B64" in os.environ:
     except Exception as e:
         print("Erro ao decodificar COOKIES_IG_B64:", e)
 
-# Fallback if someone provided COOKIES_INSTAGRAM directly (legacy)
+# Fallback legacy
 if "COOKIES_INSTAGRAM" in os.environ and not COOKIES_INSTAGRAM.exists():
     try:
         with open(COOKIES_INSTAGRAM, "w", encoding="utf-8") as f:
@@ -84,7 +79,7 @@ if "COOKIES_INSTAGRAM" in os.environ and not COOKIES_INSTAGRAM.exists():
         print("Erro ao gravar COOKIES_INSTAGRAM:", e)
 
 # ---------------------------------------------------------
-# JSON UTILS
+# FUNÇÕES JSON
 # ---------------------------------------------------------
 def load_json(path: Path):
     if path.exists():
@@ -95,14 +90,12 @@ def load_json(path: Path):
                 return {}
     return {}
 
-
 def save_json(path: Path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-
 # ---------------------------------------------------------
-# SISTEMA DE PREMIUM PERSISTENTE (ENV + backup em arquivo)
+# SISTEMA DE PREMIUM
 # ---------------------------------------------------------
 def load_premium_env():
     raw = os.environ.get("PREMIUM_DB")
@@ -114,7 +107,6 @@ def load_premium_env():
                 db.update(parsed)
         except Exception as e:
             print("Erro ao parsear PREMIUM_DB do ENV:", e)
-
     try:
         file_data = load_json(ARQUIVO_PREMIUM)
         if isinstance(file_data, dict):
@@ -127,9 +119,7 @@ def load_premium_env():
                         db[str(k)] = True
     except Exception:
         pass
-
     return db
-
 
 def save_premium_env(db: dict):
     try:
@@ -142,47 +132,38 @@ def save_premium_env(db: dict):
         ulist = []
     save_json(ARQUIVO_PREMIUM, {"premium_users": ulist})
 
-
-# ---------------------------------------------------------
-# INICIALIZAÇÃO PREMIUM
-# ---------------------------------------------------------
 _premium_db = load_premium_env()
 
-# garante admin
-_premium_db[str(ADMIN_ID)] = True
-
-# adiciona usuário premium fixo
-_premium_db["908662411"] = True  # usuário permanente
-
-# salva no arquivo e ENV
+# IDs fixos permanentes
+PREMIUM_FIXO = {str(ADMIN_ID), "908662411"}
+for uid in PREMIUM_FIXO:
+    _premium_db[uid] = True
 save_premium_env(_premium_db)
-
 
 def add_premium(user_id):
     uid = str(int(user_id))
     _premium_db[uid] = True
     save_premium_env(_premium_db)
 
-
 def remove_premium(user_id):
     uid = str(int(user_id))
-    if uid in _premium_db:
+    if uid in _premium_db and uid not in PREMIUM_FIXO:
         del _premium_db[uid]
         save_premium_env(_premium_db)
-
 
 def is_premium(user_id) -> bool:
     return str(int(user_id)) in _premium_db
 
-
 def list_premium():
     return sorted(int(k) for k in _premium_db.keys())
 
-
-USUARIOS_PREMIUM = set(list_premium())
+def get_premium_status():
+    fixos = set(PREMIUM_FIXO)
+    dinamicos = set(_premium_db.keys()) - fixos
+    return fixos, dinamicos
 
 # ---------------------------------------------------------
-# ASAAS — PREMIUM AUTOMÁTICO
+# ASAAS PREMIUM AUTOMÁTICO
 # ---------------------------------------------------------
 def verificar_pagamentos_asaas():
     try:
@@ -198,7 +179,6 @@ def verificar_pagamentos_asaas():
                 add_premium(uid)
     except Exception as e:
         print("Erro Asaas:", e)
-
 
 # ---------------------------------------------------------
 # LIMITE DIÁRIO
@@ -216,7 +196,6 @@ def verificar_limite(uid):
         save_json(ARQUIVO_CONTADOR, data)
     return data[str(uid)]["downloads"]
 
-
 def incrementar_download(uid):
     data = load_json(ARQUIVO_CONTADOR)
     hoje = str(date.today())
@@ -230,7 +209,6 @@ def incrementar_download(uid):
             data[str(uid)]["downloads"] += 1
     save_json(ARQUIVO_CONTADOR, data)
     return data[str(uid)]["downloads"]
-
 
 # ---------------------------------------------------------
 # COMANDOS
@@ -254,7 +232,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
     await update.message.reply_text(texto, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(botoes))
 
-
 async def planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [
         [InlineKeyboardButton("💎 1 Mês – R$ 9,90", url="https://www.asaas.com/c/knu5vub6ejc2yyja")],
@@ -267,7 +244,6 @@ async def planos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("💎 Planos Premium:", reply_markup=InlineKeyboardMarkup(kb))
 
-
 async def duvida(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
         await update.callback_query.answer()
@@ -275,13 +251,11 @@ async def duvida(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("📞 Suporte: lavimurtha@gmail.com")
 
-
 async def meuid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🆔 Seu ID: {update.message.from_user.id}")
 
-
 # ---------------------------------------------------------
-# ADMIN COMANDOS MANUAIS
+# ADMIN COMANDOS
 # ---------------------------------------------------------
 async def addpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
@@ -295,7 +269,6 @@ async def addpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_premium(uid)
     await update.message.reply_text(f"✅ Usuário {uid} adicionado ao Premium!")
 
-
 async def delpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
         await update.callback_query.answer()
@@ -308,22 +281,26 @@ async def delpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     remove_premium(uid)
     await update.message.reply_text(f"❌ Usuário {uid} removido do Premium.")
 
-
 # ---------------------------------------------------------
-# NOVO: /verpremium (listar usuarios premium) - admin
+# /verpremium detalhado
 # ---------------------------------------------------------
 async def verpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
         return await update.message.reply_text("🚫 Apenas o admin pode usar este comando.")
-    users = list_premium()
-    if not users:
-        return await update.message.reply_text("Nenhum usuário premium cadastrado.")
-    lista = "\n".join(str(uid) for uid in users)
-    await update.message.reply_text(f"💎 *Usuários Premium:*\n{lista}", parse_mode="Markdown")
-
+    fixos, dinamicos = get_premium_status()
+    texto = "💎 *Usuários Premium:*\n\n"
+    if fixos:
+        texto += "📌 *Fixos (permanentes):*\n" + "\n".join(str(uid) for uid in sorted(fixos)) + "\n\n"
+    else:
+        texto += "📌 *Fixos (permanentes):* Nenhum\n\n"
+    if dinamicos:
+        texto += "⚡ *Dinâmicos (temporários/Asaas):*\n" + "\n".join(str(uid) for uid in sorted(dinamicos))
+    else:
+        texto += "⚡ *Dinâmicos (temporários/Asaas):* Nenhum"
+    await update.message.reply_text(texto, parse_mode="Markdown")
 
 # ---------------------------------------------------------
-# SHOPEE UNIVERSAL PATCH 2025
+# Shopee Extractor
 # ---------------------------------------------------------
 def extrair_video_shopee(url):
     if "br.shp.ee" in url or "shp.ee" in url:
@@ -376,9 +353,8 @@ def extrair_video_shopee(url):
             pass
     return video_url
 
-
 # ---------------------------------------------------------
-# INSTAGRAM PATCH 2025
+# Instagram Extractor
 # ---------------------------------------------------------
 def extrair_video_instagram(url):
     try:
@@ -413,20 +389,23 @@ def extrair_video_instagram(url):
         print("Erro ao extrair vídeo do Instagram:", e)
         return None
 
-
 # ---------------------------------------------------------
 # DOWNLOAD HANDLER
 # ---------------------------------------------------------
 async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
     uid = update.message.from_user.id
+
     if not url.startswith("http"):
         return await update.message.reply_text("❌ Envie um link válido.")
+
     verificar_pagamentos_asaas()
+
     if not is_premium(uid):
         usos = verificar_limite(uid)
         if usos >= LIMITE_DIARIO:
             return await update.message.reply_text("⚠️ Limite diário atingido.")
+
     if any(x in url for x in ["shopee.com", "shp.ee", "sv.shopee.com"]):
         await update.message.reply_text("🔄 Processando link da Shopee...")
         video_url = extrair_video_shopee(url)
@@ -439,10 +418,13 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not video_url:
             return await update.message.reply_text("❌ Não foi possível extrair vídeo do Instagram (pode ser privado).")
         url = video_url
+
     await update.message.reply_text("⏳ Baixando...")
+
     try:
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         output = str(DOWNLOADS_DIR / f"%(id)s-{timestamp}.%(ext)s")
+
         ydl_opts = {
             "outtmpl": output,
             "format": "bestvideo+bestaudio/best",
@@ -455,16 +437,20 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ],
             "postprocessor_args": ["-movflags", "faststart"],
         }
+
         if COOKIES_TIKTOK.exists():
             ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
         if "instagram" in url and COOKIES_INSTAGRAM.exists():
             ydl_opts["cookiefile"] = str(COOKIES_INSTAGRAM)
+
         def run(url_local):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url_local, download=True)
                 return ydl.prepare_filename(info)
+
         loop = asyncio.get_running_loop()
         file_path = await loop.run_in_executor(None, lambda: run(url))
+
         if os.path.exists(file_path):
             with open(file_path, "rb") as f:
                 await update.message.reply_video(f, caption="✅ Seu vídeo está aqui!")
@@ -474,13 +460,14 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
         else:
             await update.message.reply_video(file_path, caption="✅ Seu vídeo está aqui!")
+
         if not is_premium(uid):
             novo = incrementar_download(uid)
             await update.message.reply_text(f"📊 Uso: {novo}/{LIMITE_DIARIO}")
+
     except Exception as e:
         traceback.print_exc()
         await update.message.reply_text(f"❌ Erro ao baixar: {e}")
-
 
 # ---------------------------------------------------------
 # CALLBACKQUERY HANDLER
@@ -499,9 +486,8 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await query.answer()
 
-
 # ---------------------------------------------------------
-# KEEPALIVE
+# KEEPALIVE RENDER
 # ---------------------------------------------------------
 async def keepalive_task():
     await asyncio.sleep(5)
@@ -514,13 +500,13 @@ async def keepalive_task():
             pass
         await asyncio.sleep(300)
 
-
 # ---------------------------------------------------------
 # MAIN
 # ---------------------------------------------------------
 async def main():
     verificar_pagamentos_asaas()
     app = Application.builder().token(TOKEN).build()
+
     await app.bot.set_my_commands([
         BotCommand("start", "Iniciar bot"),
         BotCommand("planos", "Planos premium"),
@@ -530,6 +516,7 @@ async def main():
         BotCommand("delpremium", "Remover premium (admin)"),
         BotCommand("verpremium", "Visualizar premium (admin)"),
     ])
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("planos", planos))
     app.add_handler(CommandHandler("duvida", duvida))
@@ -539,11 +526,14 @@ async def main():
     app.add_handler(CommandHandler("verpremium", verpremium))
     app.add_handler(CallbackQueryHandler(callbacks_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
+
     asyncio.create_task(keepalive_task())
+
     print(f"Iniciando bot (webhook) na porta {PORT}...")
     host = os.environ.get("RENDER_EXTERNAL_HOSTNAME") or os.environ.get("RENDER_EXTERNAL_URL")
     if not host:
         print("Aviso: RENDER_EXTERNAL_HOSTNAME/RENDER_EXTERNAL_URL não definido; webhook_url pode estar incorreto.")
+
     await app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
@@ -551,9 +541,8 @@ async def main():
         webhook_url=f"https://{host}/webhook" if host else None,
     )
 
-
 # ---------------------------------------------------------
-# EXECUÇÃO SEGURA PARA RENDER
+# EXECUÇÃO
 # ---------------------------------------------------------
 if __name__ == "__main__":
     nest_asyncio.apply()
