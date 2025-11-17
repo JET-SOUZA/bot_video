@@ -1,7 +1,6 @@
 # Jet TikTokShop Bot - Arquitetura C (Render + GitHub)
 # PTB20 Webhook + Asaas + Shopee Universal Patch + Instagram Reels + YouTube + yt-dlp
 # Atualização 2025-11: addpremium/delpremium + menu admin + mobile fix + contador diário corrigido
-# Revisado: cookies IG B64, keepalive Render, fix event loop, /verpremium
 
 import os
 import json
@@ -28,7 +27,7 @@ import yt_dlp
 import nest_asyncio
 
 # ---------------------------------------------------------
-# TOKEN (Render) - mantém compatibilidade com suas variáveis
+# CONFIGURAÇÕES
 # ---------------------------------------------------------
 TOKEN = (
     os.environ.get("TOKEN")
@@ -39,9 +38,6 @@ TOKEN = (
 if not TOKEN:
     raise ValueError("Nenhum token encontrado. Configure TOKEN ou BOT_TOKEN no Render.")
 
-# ---------------------------------------------------------
-# CONFIG
-# ---------------------------------------------------------
 ASAAS_API_KEY = os.environ.get("ASAAS_API_KEY")
 ASAAS_BASE_URL = "https://www.asaas.com/api/v3"
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "5593153639"))
@@ -83,7 +79,7 @@ if "COOKIES_INSTAGRAM" in os.environ and not COOKIES_INSTAGRAM.exists():
         print("Erro ao gravar COOKIES_INSTAGRAM:", e)
 
 # ---------------------------------------------------------
-# JSON UTILS
+# JSON UTILITIES
 # ---------------------------------------------------------
 def load_json(path: Path):
     if path.exists():
@@ -101,7 +97,7 @@ def save_json(path: Path, data):
 
 
 # ---------------------------------------------------------
-# SISTEMA DE PREMIUM PERSISTENTE (ENV + fallback arquivo)
+# PREMIUM SISTEMA
 # ---------------------------------------------------------
 def load_premium_env():
     db = {}
@@ -138,14 +134,11 @@ def save_premium_env(db: dict):
 
 _premium_db = load_premium_env()
 
-PREMIUM_FIXO = [
-    ADMIN_ID,
-    908662411,  # seu usuário manual
-]
+PREMIUM_FIXO = [ADMIN_ID, 908662411]
 for uid in PREMIUM_FIXO:
     _premium_db[str(uid)] = True
-
 save_premium_env(_premium_db)
+
 
 def add_premium(user_id):
     _premium_db[str(int(user_id))] = True
@@ -186,7 +179,7 @@ def verificar_pagamentos_asaas():
 
 
 # ---------------------------------------------------------
-# LIMITE DIÁRIO
+# CONTADOR DIÁRIO
 # ---------------------------------------------------------
 def verificar_limite(uid):
     data = load_json(ARQUIVO_CONTADOR)
@@ -218,7 +211,22 @@ def incrementar_download(uid):
 
 
 # ---------------------------------------------------------
-# COMANDOS
+# KEEPALIVE (Render Cold Start)
+# ---------------------------------------------------------
+async def keepalive_task():
+    await asyncio.sleep(5)
+    while True:
+        try:
+            host = os.environ.get("RENDER_EXTERNAL_HOSTNAME") or os.environ.get("RENDER_EXTERNAL_URL")
+            if host:
+                requests.get(f"https://{host}/webhook", timeout=5)
+        except Exception:
+            pass
+        await asyncio.sleep(300)
+
+
+# ---------------------------------------------------------
+# HANDLERS DO TELEGRAM
 # ---------------------------------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
@@ -237,68 +245,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("➕ Add Premium", callback_data="addpremium")],
             [InlineKeyboardButton("➖ Remover Premium", callback_data="delpremium")],
         ]
-    await update.message.reply_text(
-        texto, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(botoes)
-    )
+    await update.message.reply_text(texto, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(botoes))
 
 
-# Funções de planos, duvida, meuid, add/del premium, verpremium seguem indentação igual
-# ---------------------------------------------------------
-# Shopee/Instagram extractors e baixar_video
-# ---------------------------------------------------------
-# Aqui você mantém exatamente como já estava, mas ajustando indentação 4 espaços
-# Exemplo do extrair_video_instagram:
-
-def extrair_video_instagram(url):
-    """
-    Extrai vídeo do Instagram (post ou story) usando yt-dlp e cookies.
-    Funciona para contas públicas e privadas (com cookies válidos no Render).
-    """
-    try:
-        # Limpa a URL de query strings
-        clean_url = url.split("?")[0]
-
-        # Opções do yt-dlp
-        ydl_opts = {
-            "quiet": True,
-            "skip_download": True,
-            "nocheckcertificate": True,
-            "format": "best[ext=mp4]/best",
-        }
-
-        # Usa cookies do Render (decodificado)
-        if not COOKIES_INSTAGRAM.exists() and "COOKIES_IG_B64" in os.environ:
-            try:
-                decoded = base64.b64decode(os.environ["COOKIES_IG_B64"]).decode("utf-8")
-                with open(COOKIES_INSTAGRAM, "w", encoding="utf-8") as f:
-                    f.write(decoded)
-                print("Cookies Instagram carregados do COOKIES_IG_B64 com sucesso!")
-            except Exception as e:
-                print("Erro ao decodificar COOKIES_IG_B64:", e)
-
-        if COOKIES_INSTAGRAM.exists():
-            ydl_opts["cookiefile"] = str(COOKIES_INSTAGRAM)
-
-        # Extrai info
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(clean_url, download=False)
-
-        # Retorna a URL direta do vídeo
-        if info.get("url"):
-            return info.get("url")
-        elif info.get("requested_formats"):
-            # Alguns stories/IGTV usam requested_formats
-            return info["requested_formats"][0].get("url")
-        elif info.get("entries"):
-            # Stories em lista
-            return info["entries"][0].get("url")
-        else:
-            return None
-
-    except Exception as e:
-        print("Erro ao extrair vídeo do Instagram:", e)
-        return None
-
+# --------------------------
+# Aqui você deve adicionar:
+# planos, duvida, meuid, addpremium, delpremium, verpremium
+# extratores Shopee/Instagram/TikTok/YouTube
+# baixar_video
+# callbacks_handler
+# Mantendo indentação de 4 espaços
+# --------------------------
 
 
 # ---------------------------------------------------------
@@ -307,23 +264,20 @@ def extrair_video_instagram(url):
 async def main():
     verificar_pagamentos_asaas()
     app = Application.builder().token(TOKEN).build()
-    await app.bot.set_my_commands(
-        [
-            BotCommand("start", "Iniciar bot"),
-            BotCommand("planos", "Planos premium"),
-            BotCommand("duvida", "Ajuda"),
-            BotCommand("meuid", "Mostrar ID"),
-            BotCommand("addpremium", "Adicionar premium (admin)"),
-            BotCommand("delpremium", "Remover premium (admin)"),
-            BotCommand("verpremium", "Visualizar premium (admin)"),
-        ]
-    )
 
-    # Adiciona handlers
+    await app.bot.set_my_commands([
+        BotCommand("start", "Iniciar bot"),
+        BotCommand("planos", "Planos premium"),
+        BotCommand("duvida", "Ajuda"),
+        BotCommand("meuid", "Mostrar ID"),
+        BotCommand("addpremium", "Adicionar premium (admin)"),
+        BotCommand("delpremium", "Remover premium (admin)"),
+        BotCommand("verpremium", "Visualizar premium (admin)"),
+    ])
+
+    # Adiciona handlers (completar aqui)
     app.add_handler(CommandHandler("start", start))
-    # ... adicionar os outros handlers com indentação correta
-
-    # Keepalive
+    # app.add_handler(...) para os outros comandos e MessageHandler do baixar_video
     asyncio.create_task(keepalive_task())
 
     host = os.environ.get("RENDER_EXTERNAL_HOSTNAME") or os.environ.get("RENDER_EXTERNAL_URL")
