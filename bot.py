@@ -53,7 +53,7 @@ DOWNLOADS_DIR = SCRIPT_DIR / "downloads"
 DOWNLOADS_DIR.mkdir(exist_ok=True)
 
 ARQUIVO_CONTADOR = SCRIPT_DIR / "downloads.json"
-ARQUIVO_PREMIUM = SCRIPT_DIR / "premium.json"
+ARQUIVO_PREMIUM = SCRIPT_DIR / "premium.json"  # backup file persistence
 COOKIES_TIKTOK = SCRIPT_DIR / "cookies.txt"
 COOKIES_INSTAGRAM = SCRIPT_DIR / "cookies_ig.txt"
 
@@ -86,7 +86,7 @@ if "COOKIES_INSTAGRAM" in os.environ and not COOKIES_INSTAGRAM.exists():
 # ---------------------------------------------------------
 # JSON UTILS
 # ---------------------------------------------------------
-def load_json(path):
+def load_json(path: Path):
     if path.exists():
         with open(path, "r", encoding="utf-8") as f:
             try:
@@ -96,26 +96,117 @@ def load_json(path):
     return {}
 
 
-def save_json(path, data):
+def save_json(path: Path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
 # ---------------------------------------------------------
-# PREMIUM
+# SISTEMA DE PREMIUM PERSISTENTE (ENV + fallback arquivo)
 # ---------------------------------------------------------
-def load_premium():
-    data = load_json(ARQUIVO_PREMIUM)
-    return set(map(int, data.get("premium_users", [])))
+
+def load_premium_env():
+    """
+    Carrega PREMIUM_DB do ENV (string JSON) + merge com premium.json.
+    Retorna dict {user_id_str: True}
+    """
+    db = {}
+
+    # 1 — Carrega ENV (se existir)
+    raw = os.environ.get("PREMIUM_DB")
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                db.update(parsed)
+        except Exception as e:
+            print("Erro ao parsear PREMIUM_DB:", e)
+
+    # 2 — Merge com arquivo (fallback)
+    try:
+        file_data = load_json(ARQUIVO_PREMIUM)
+        if isinstance(file_data, dict):
+
+            # suporte antigo: {"premium_users": [...]}
+            if "premium_users" in file_data:
+                for uid in file_data["premium_users"]:
+                    db[str(uid)] = True
+
+            else:
+                # dict antigo {"123": true, "321": true}
+                for k, v in file_data.items():
+                    if v:
+                        db[str(k)] = True
+    except Exception:
+        pass
+
+    return db
 
 
-def save_premium(users):
-    save_json(ARQUIVO_PREMIUM, {"premium_users": list(users)})
+def save_premium_env(db: dict):
+    """
+    Salva no arquivo premium.json (persistente sempre).
+    Também coloca no ENV para a execução atual.
+    No Render Free, somente o arquivo garante persistência entre reinícios.
+    """
+    try:
+        os.environ["PREMIUM_DB"] = json.dumps(db)
+    except Exception:
+        pass
+
+    # salva backup oficial do bot
+    save_json(ARQUIVO_PREMIUM, {"premium_users": [int(k) for k in db.keys()]})
 
 
-USUARIOS_PREMIUM = load_premium()
-USUARIOS_PREMIUM.add(ADMIN_ID)
-save_premium(USUARIOS_PREMIUM)
+# Banco interno carregado
+_premium_db = load_premium_env()
+
+
+# ---------------------------------------------------------
+# PREMIUM MANUAL FIXO (permanente)
+# ---------------------------------------------------------
+PREMIUM_FIXO = [
+    ADMIN_ID,     # Admin sempre premium
+    908662411,    # Seu usuário manual
+    # Adicione mais aqui:
+    # 123456789,
+    # 987654321,
+]
+
+for uid in PREMIUM_FIXO:
+    _premium_db[str(uid)] = True
+
+
+# Salva tudo junto só UMA vez (evita duplicação)
+save_premium_env(_premium_db)
+
+
+# ---------------------------------------------------------
+# FUNÇÕES DE PREMIUM
+# ---------------------------------------------------------
+def add_premium(user_id):
+    uid = str(int(user_id))
+    _premium_db[uid] = True
+    save_premium_env(_premium_db)
+
+
+def remove_premium(user_id):
+    uid = str(int(user_id))
+    if uid in _premium_db:
+        del _premium_db[uid]
+        save_premium_env(_premium_db)
+
+
+def is_premium(user_id) -> bool:
+    return str(int(user_id)) in _premium_db
+
+
+def list_premium():
+    return sorted(int(k) for k in _premium_db.keys())
+
+
+# Retrocompatibilidade (se alguém usar variável antiga)
+USUARIOS_PREMIUM = set(list_premium())
 
 # ---------------------------------------------------------
 # ASAAS — PREMIUM AUTOMÁTICO
@@ -123,7 +214,7 @@ save_premium(USUARIOS_PREMIUM)
 def verificar_pagamentos_asaas():
     try:
         if not ASAAS_API_KEY:
-            # print apenas no inicio; não quebra caso não tenha ASaaS
+            # print apenas no inicio; não quebra caso não tenha Asaas
             print("Asaas desativado (sem API KEY).")
             return
         url = f"{ASAAS_BASE_URL}/payments?status=CONFIRMED&limit=100"
@@ -132,8 +223,7 @@ def verificar_pagamentos_asaas():
         for p in data.get("data", []):
             if "metadata" in p and "telegram_id" in p["metadata"]:
                 uid = int(p["metadata"]["telegram_id"])
-                USUARIOS_PREMIUM.add(uid)
-        save_premium(USUARIOS_PREMIUM)
+                add_premium(uid)  # adiciona persistente
     except Exception as e:
         print("Erro Asaas:", e)
 
@@ -241,8 +331,7 @@ async def addpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         return await update.message.reply_text("Uso: /addpremium <user_id>")
     uid = int(context.args[0])
-    USUARIOS_PREMIUM.add(uid)
-    save_premium(USUARIOS_PREMIUM)
+    add_premium(uid)
     await update.message.reply_text(f"✅ Usuário {uid} adicionado ao Premium!")
 
 
@@ -257,12 +346,8 @@ async def delpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         return await update.message.reply_text("Uso: /delpremium <user_id>")
     uid = int(context.args[0])
-    if uid in USUARIOS_PREMIUM:
-        USUARIOS_PREMIUM.remove(uid)
-        save_premium(USUARIOS_PREMIUM)
-        await update.message.reply_text(f"❌ Usuário {uid} removido do Premium.")
-    else:
-        await update.message.reply_text("Usuário não está no Premium.")
+    remove_premium(uid)
+    await update.message.reply_text(f"❌ Usuário {uid} removido do Premium.")
 
 
 # ---------------------------------------------------------
@@ -272,10 +357,11 @@ async def verpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
         return await update.message.reply_text("🚫 Apenas o admin pode usar este comando.")
 
-    if not USUARIOS_PREMIUM:
+    users = list_premium()
+    if not users:
         return await update.message.reply_text("Nenhum usuário premium cadastrado.")
 
-    lista = "\n".join(str(uid) for uid in sorted(USUARIOS_PREMIUM))
+    lista = "\n".join(str(uid) for uid in users)
     await update.message.reply_text(f"💎 *Usuários Premium:*\n{lista}", parse_mode="Markdown")
 
 
@@ -371,7 +457,8 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     verificar_pagamentos_asaas()
 
-    if uid not in USUARIOS_PREMIUM:
+    # usa is_premium() em vez de set direto
+    if not is_premium(uid):
         usos = verificar_limite(uid)
         if usos >= LIMITE_DIARIO:
             return await update.message.reply_text("⚠️ Limite diário atingido.")
@@ -437,7 +524,7 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # se o extractor retornou uma URL direta em vez de arquivo local
             await update.message.reply_video(file_path, caption="✅ Seu vídeo está aqui!")
 
-        if uid not in USUARIOS_PREMIUM:
+        if not is_premium(uid):
             novo = incrementar_download(uid)
             await update.message.reply_text(f"📊 Uso: {novo}/{LIMITE_DIARIO}")
 
@@ -530,6 +617,6 @@ async def main():
 # EXECUÇÃO SEGURA PARA RENDER
 # ---------------------------------------------------------
 if __name__ == "__main__":
-    # evita RuntimeError: This event loop is already running
+    # evita RuntimeError: This event loop é já executando
     nest_asyncio.apply()
     asyncio.get_event_loop().run_until_complete(main())
