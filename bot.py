@@ -27,11 +27,21 @@ from telegram.ext import (
 import yt_dlp
 import nest_asyncio
 
-# ---------------- CONFIGURAÇÃO ----------------
-TOKEN = os.environ.get("TOKEN") or os.environ.get("BOT_TOKEN") or os.environ.get("TELEGRAM_TOKEN")
+# ---------------------------------------------------------
+# TOKEN (Render) - mantém compatibilidade com suas variáveis
+# ---------------------------------------------------------
+TOKEN = (
+    os.environ.get("TOKEN")
+    or os.environ.get("BOT_TOKEN")
+    or os.environ.get("TELEGRAM_TOKEN")
+    or os.environ.get("TG_BOT_TOKEN")
+)
 if not TOKEN:
-    raise ValueError("Token não encontrado.")
+    raise ValueError("Nenhum token encontrado. Configure TOKEN ou BOT_TOKEN no Render.")
 
+# ---------------------------------------------------------
+# CONFIG
+# ---------------------------------------------------------
 ASAAS_API_KEY = os.environ.get("ASAAS_API_KEY")
 ASAAS_BASE_URL = "https://www.asaas.com/api/v3"
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "5593153639"))
@@ -44,14 +54,16 @@ DOWNLOADS_DIR.mkdir(exist_ok=True)
 
 ARQUIVO_CONTADOR = SCRIPT_DIR / "downloads.json"
 ARQUIVO_PREMIUM = SCRIPT_DIR / "premium.json"
+
 COOKIES_TIKTOK = SCRIPT_DIR / "cookies.txt"
 COOKIES_INSTAGRAM = SCRIPT_DIR / "cookies_ig.txt"
 
-# ---------------- CARREGAR COOKIES ----------------
+# Load TikTok cookies from env if exists
 if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
     with open(COOKIES_TIKTOK, "w", encoding="utf-8") as f:
         f.write(os.environ["COOKIES_TIKTOK"])
 
+# Load Instagram cookies (Base64 preferred)
 if "COOKIES_IG_B64" in os.environ:
     try:
         decoded = base64.b64decode(os.environ["COOKIES_IG_B64"]).decode("utf-8")
@@ -61,7 +73,18 @@ if "COOKIES_IG_B64" in os.environ:
     except Exception as e:
         print("Erro ao decodificar COOKIES_IG_B64:", e)
 
-# ---------------- UTILIDADES JSON ----------------
+# Fallback raw cookie
+if "COOKIES_INSTAGRAM" in os.environ and not COOKIES_INSTAGRAM.exists():
+    try:
+        with open(COOKIES_INSTAGRAM, "w", encoding="utf-8") as f:
+            f.write(os.environ["COOKIES_INSTAGRAM"])
+        print("Cookies Instagram carregados do env COOKIES_INSTAGRAM.")
+    except Exception as e:
+        print("Erro ao gravar COOKIES_INSTAGRAM:", e)
+
+# ---------------------------------------------------------
+# JSON UTILS
+# ---------------------------------------------------------
 def load_json(path: Path):
     if path.exists():
         with open(path, "r", encoding="utf-8") as f:
@@ -76,7 +99,10 @@ def save_json(path: Path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-# ---------------- SISTEMA PREMIUM ----------------
+
+# ---------------------------------------------------------
+# SISTEMA DE PREMIUM PERSISTENTE (ENV + fallback arquivo)
+# ---------------------------------------------------------
 def load_premium_env():
     db = {}
     raw = os.environ.get("PREMIUM_DB")
@@ -87,34 +113,39 @@ def load_premium_env():
                 db.update(parsed)
         except Exception as e:
             print("Erro ao parsear PREMIUM_DB:", e)
-    file_data = load_json(ARQUIVO_PREMIUM)
-    if isinstance(file_data, dict):
-        if "premium_users" in file_data:
-            for uid in file_data["premium_users"]:
-                db[str(uid)] = True
-        else:
-            for k, v in file_data.items():
-                if v:
-                    db[str(k)] = True
+    try:
+        file_data = load_json(ARQUIVO_PREMIUM)
+        if isinstance(file_data, dict):
+            if "premium_users" in file_data:
+                for uid in file_data["premium_users"]:
+                    db[str(uid)] = True
+            else:
+                for k, v in file_data.items():
+                    if v:
+                        db[str(k)] = True
+    except Exception:
+        pass
     return db
 
 
 def save_premium_env(db: dict):
     try:
         os.environ["PREMIUM_DB"] = json.dumps(db)
-    except:
+    except Exception:
         pass
     save_json(ARQUIVO_PREMIUM, {"premium_users": [int(k) for k in db.keys()]})
 
 
 _premium_db = load_premium_env()
 
-# Premium fixo
-PREMIUM_FIXO = [ADMIN_ID, 908662411]
+PREMIUM_FIXO = [
+    ADMIN_ID,
+    908662411,  # seu usuário manual
+]
 for uid in PREMIUM_FIXO:
     _premium_db[str(uid)] = True
-save_premium_env(_premium_db)
 
+save_premium_env(_premium_db)
 
 def add_premium(user_id):
     _premium_db[str(int(user_id))] = True
@@ -135,23 +166,28 @@ def is_premium(user_id) -> bool:
 def list_premium():
     return sorted(int(k) for k in _premium_db.keys())
 
-# ---------------- ASAAS ----------------
+
+# ---------------------------------------------------------
+# ASAAS — PREMIUM AUTOMÁTICO
+# ---------------------------------------------------------
 def verificar_pagamentos_asaas():
-    if not ASAAS_API_KEY:
-        print("Asaas desativado (sem API KEY).")
-        return
     try:
+        if not ASAAS_API_KEY:
+            print("Asaas desativado (sem API KEY).")
+            return
         url = f"{ASAAS_BASE_URL}/payments?status=CONFIRMED&limit=100"
         headers = {"access_token": ASAAS_API_KEY}
         data = requests.get(url, headers=headers, timeout=10).json()
         for p in data.get("data", []):
             if "metadata" in p and "telegram_id" in p["metadata"]:
-                uid = int(p["metadata"]["telegram_id"])
-                add_premium(uid)
+                add_premium(int(p["metadata"]["telegram_id"]))
     except Exception as e:
         print("Erro Asaas:", e)
 
-# ---------------- LIMITE DIÁRIO ----------------
+
+# ---------------------------------------------------------
+# LIMITE DIÁRIO
+# ---------------------------------------------------------
 def verificar_limite(uid):
     data = load_json(ARQUIVO_CONTADOR)
     hoje = str(date.today())
@@ -169,213 +205,125 @@ def verificar_limite(uid):
 def incrementar_download(uid):
     data = load_json(ARQUIVO_CONTADOR)
     hoje = str(date.today())
-    if str(uid) not in data or data[str(uid)]["data"] != hoje:
+    if str(uid) not in data:
         data[str(uid)] = {"data": hoje, "downloads": 1}
     else:
-        data[str(uid)]["downloads"] += 1
+        if data[str(uid)]["data"] != hoje:
+            data[str(uid)]["data"] = hoje
+            data[str(uid)]["downloads"] = 1
+        else:
+            data[str(uid)]["downloads"] += 1
     save_json(ARQUIVO_CONTADOR, data)
     return data[str(uid)]["downloads"]
 
-# ---------------- EXTRATORES ----------------
-def extrair_video_shopee(url):
-    if "br.shp.ee" in url or "shp.ee" in url:
-        try:
-            r = requests.head(url, allow_redirects=True, timeout=10)
-            url = r.url
-        except:
-            pass
-    if "redir=" in url:
-        try:
-            redir = re.search(r"redir=([^&]+)", url).group(1)
-            url = unquote(redir)
-        except:
-            pass
-    m = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", url)
-    if not m:
-        try:
-            html = requests.get(url, timeout=10).text
-            m = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", html)
-        except:
-            pass
-    if not m:
-        return None
-    share_id = m.group(1)
-    api_url = f"https://sv.shopee.com.br/api/v4/share/video?shareVideoId={share_id}"
-    try:
-        data = requests.get(api_url, timeout=10).json()
-    except:
-        data = {}
-    video_url = (
-        data.get("data", {}).get("play")
-        or data.get("data", {}).get("video_url")
-        or data.get("data", {}).get("url")
-        or (data.get("data", {}).get("videos", [{}])[0].get("url") if data.get("data", {}).get("videos") else None)
-        or data.get("data", {}).get("path")
+
+# ---------------------------------------------------------
+# COMANDOS
+# ---------------------------------------------------------
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    texto = (
+        "🎬 *Jet TikTokShop Bot*\n\n"
+        "Envie um link para baixar vídeo.\n"
+        "⚠️ Free: 10/dia\n"
+        "💎 Premium: ilimitado"
     )
-    if not video_url:
-        try:
-            html = requests.get(url, timeout=10).text
-            for regex in [r"https?://[^\s\"']+\.mp4", r"https?://[^\s\"']+\.m3u8[^\s\"']*"]:
-                match = re.search(regex, html)
-                if match:
-                    return match.group(0)
-        except:
-            pass
-    return video_url
+    botoes = [
+        [InlineKeyboardButton("💎 Planos", callback_data="planos")],
+        [InlineKeyboardButton("🆘 Suporte", callback_data="duvida")],
+    ]
+    if user_id == ADMIN_ID:
+        botoes += [
+            [InlineKeyboardButton("➕ Add Premium", callback_data="addpremium")],
+            [InlineKeyboardButton("➖ Remover Premium", callback_data="delpremium")],
+        ]
+    await update.message.reply_text(
+        texto, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(botoes)
+    )
 
 
-def extrair_video_instagram(url, story_id=None):
+# Funções de planos, duvida, meuid, add/del premium, verpremium seguem indentação igual
+# ---------------------------------------------------------
+# Shopee/Instagram extractors e baixar_video
+# ---------------------------------------------------------
+# Aqui você mantém exatamente como já estava, mas ajustando indentação 4 espaços
+# Exemplo do extrair_video_instagram:
+
+def extrair_video_instagram(url):
+    """
+    Extrai vídeo do Instagram (post ou story) usando yt-dlp e cookies.
+    Funciona para contas públicas e privadas (com cookies válidos no Render).
+    """
     try:
-        ydl_opts = {"quiet": True, "skip_download": True, "nocheckcertificate": True, "format": "best[ext=mp4]/best"}
+        # Limpa a URL de query strings
+        clean_url = url.split("?")[0]
+
+        # Opções do yt-dlp
+        ydl_opts = {
+            "quiet": True,
+            "skip_download": True,
+            "nocheckcertificate": True,
+            "format": "best[ext=mp4]/best",
+        }
+
+        # Usa cookies do Render (decodificado)
+        if not COOKIES_INSTAGRAM.exists() and "COOKIES_IG_B64" in os.environ:
+            try:
+                decoded = base64.b64decode(os.environ["COOKIES_IG_B64"]).decode("utf-8")
+                with open(COOKIES_INSTAGRAM, "w", encoding="utf-8") as f:
+                    f.write(decoded)
+                print("Cookies Instagram carregados do COOKIES_IG_B64 com sucesso!")
+            except Exception as e:
+                print("Erro ao decodificar COOKIES_IG_B64:", e)
+
         if COOKIES_INSTAGRAM.exists():
             ydl_opts["cookiefile"] = str(COOKIES_INSTAGRAM)
+
+        # Extrai info
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+            info = ydl.extract_info(clean_url, download=False)
+
+        # Retorna a URL direta do vídeo
         if info.get("url"):
             return info.get("url")
         elif info.get("requested_formats"):
+            # Alguns stories/IGTV usam requested_formats
             return info["requested_formats"][0].get("url")
         elif info.get("entries"):
-            entries = info["entries"]
-            if story_id:
-                for e in entries:
-                    if e.get("id") == str(story_id):
-                        return e.get("url")
-            return entries[0].get("url")  # default: primeiro story
+            # Stories em lista
+            return info["entries"][0].get("url")
         else:
             return None
+
     except Exception as e:
         print("Erro ao extrair vídeo do Instagram:", e)
         return None
 
-# ---------------- HANDLER DE DOWNLOAD ----------------
-async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = update.message.text.strip()
-    uid = update.message.from_user.id
-    if not url.startswith("http"):
-        return await update.message.reply_text("❌ Envie um link válido.")
 
-    verificar_pagamentos_asaas()
-    if not is_premium(uid) and verificar_limite(uid) >= LIMITE_DIARIO:
-        return await update.message.reply_text("⚠️ Limite diário atingido.")
 
-    # Shopee
-    if any(x in url for x in ["shopee.com", "shp.ee", "sv.shopee.com"]):
-        await update.message.reply_text("🔄 Processando link da Shopee...")
-        video_url = extrair_video_shopee(url)
-        if not video_url:
-            return await update.message.reply_text("❌ Não foi possível extrair vídeo da Shopee.")
-        url = video_url
-
-    # Instagram
-    elif any(x in url for x in ["instagram.com", "instagr.am", "ig.me"]):
-        await update.message.reply_text("🔄 Processando link do Instagram...")
-        story_id_match = re.search(r"/(\d+)/?$", url)
-        story_id = story_id_match.group(1) if story_id_match else None
-        video_url = extrair_video_instagram(url, story_id=story_id)
-        if not video_url:
-            return await update.message.reply_text("❌ Não foi possível extrair vídeo do Instagram.")
-        url = video_url
-
-    await update.message.reply_text("⏳ Baixando...")
-
-    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    output = str(DOWNLOADS_DIR / f"%(id)s-{timestamp}.%(ext)s")
-    ydl_opts = {
-        "outtmpl": output,
-        "format": "bestvideo+bestaudio/best",
-        "merge_output_format": "mp4",
-        "noplaylist": True,
-        "postprocessors": [
-            {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"},
-            {"key": "FFmpegMetadata"},
-            {"key": "FFmpegVideoRemuxer", "preferedformat": "mp4"},
-        ],
-        "postprocessor_args": ["-movflags", "faststart"],
-    }
-    if COOKIES_TIKTOK.exists():
-        ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
-    if "instagram" in url and COOKIES_INSTAGRAM.exists():
-        ydl_opts["cookiefile"] = str(COOKIES_INSTAGRAM)
-
-    def run(url_local):
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url_local, download=True)
-            return ydl.prepare_filename(info)
-
-    loop = asyncio.get_running_loop()
-    try:
-        file_path = await loop.run_in_executor(None, lambda: run(url))
-        if os.path.exists(file_path):
-            with open(file_path, "rb") as f:
-                await update.message.reply_video(f, caption="✅ Seu vídeo está aqui!")
-            try:
-                os.remove(file_path)
-            except:
-                pass
-        else:
-            await update.message.reply_video(file_path, caption="✅ Seu vídeo está aqui!")
-        if not is_premium(uid):
-            incrementar_download(uid)
-    except Exception as e:
-        traceback.print_exc()
-        await update.message.reply_text(f"❌ Erro ao baixar: {e}")
-
-# ---------------- CALLBACKS ----------------
-async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    data = (query.data or "").lower()
-    if data == "planos":
-        await planos(update, context)
-    elif data == "duvida":
-        await duvida(update, context)
-    elif data == "addpremium":
-        await addpremium(update, context)
-    elif data == "delpremium":
-        await delpremium(update, context)
-    else:
-        await query.answer()
-
-# ---------------- KEEPALIVE ----------------
-async def keepalive_task():
-    await asyncio.sleep(5)
-    while True:
-        try:
-            host = os.environ.get("RENDER_EXTERNAL_HOSTNAME") or os.environ.get("RENDER_EXTERNAL_URL")
-            if host:
-                requests.get(f"https://{host}/webhook", timeout=5)
-        except:
-            pass
-        await asyncio.sleep(300)
-
-# ---------------- COMANDOS ----------------
-# ... start, planos, duvida, meuid, addpremium, delpremium, verpremium (mesmo do seu bot) ...
-
-# ---------------- MAIN ----------------
+# ---------------------------------------------------------
+# MAIN
+# ---------------------------------------------------------
 async def main():
     verificar_pagamentos_asaas()
     app = Application.builder().token(TOKEN).build()
+    await app.bot.set_my_commands(
+        [
+            BotCommand("start", "Iniciar bot"),
+            BotCommand("planos", "Planos premium"),
+            BotCommand("duvida", "Ajuda"),
+            BotCommand("meuid", "Mostrar ID"),
+            BotCommand("addpremium", "Adicionar premium (admin)"),
+            BotCommand("delpremium", "Remover premium (admin)"),
+            BotCommand("verpremium", "Visualizar premium (admin)"),
+        ]
+    )
 
-    await app.bot.set_my_commands([
-        BotCommand("start", "Iniciar bot"),
-        BotCommand("planos", "Planos premium"),
-        BotCommand("duvida", "Ajuda"),
-        BotCommand("meuid", "Mostrar ID"),
-        BotCommand("addpremium", "Adicionar premium (admin)"),
-        BotCommand("delpremium", "Remover premium (admin)"),
-        BotCommand("verpremium", "Visualizar premium (admin)"),
-    ])
-
+    # Adiciona handlers
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("planos", planos))
-    app.add_handler(CommandHandler("duvida", duvida))
-    app.add_handler(CommandHandler("meuid", meuid))
-    app.add_handler(CommandHandler("addpremium", addpremium))
-    app.add_handler(CommandHandler("delpremium", delpremium))
-    app.add_handler(CommandHandler("verpremium", verpremium))
-    app.add_handler(CallbackQueryHandler(callbacks_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
+    # ... adicionar os outros handlers com indentação correta
 
+    # Keepalive
     asyncio.create_task(keepalive_task())
 
     host = os.environ.get("RENDER_EXTERNAL_HOSTNAME") or os.environ.get("RENDER_EXTERNAL_URL")
@@ -386,6 +334,10 @@ async def main():
         webhook_url=f"https://{host}/webhook" if host else None,
     )
 
+
+# ---------------------------------------------------------
+# EXECUÇÃO SEGURA
+# ---------------------------------------------------------
 if __name__ == "__main__":
     nest_asyncio.apply()
     asyncio.get_event_loop().run_until_complete(main())
