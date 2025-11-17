@@ -427,19 +427,51 @@ def extrair_video_shopee(url):
 # INSTAGRAM PATCH 2025
 # ---------------------------------------------------------
 def extrair_video_instagram(url):
+    """
+    Extrai vídeo do Instagram (post ou story) usando yt-dlp e cookies.
+    Funciona para contas públicas e privadas (com cookies válidos no Render).
+    """
     try:
+        # Limpa a URL de query strings
         clean_url = url.split("?")[0]
+
+        # Opções do yt-dlp
         ydl_opts = {
             "quiet": True,
             "skip_download": True,
             "nocheckcertificate": True,
             "format": "best[ext=mp4]/best",
         }
+
+        # Usa cookies do Render (decodificado)
+        if not COOKIES_INSTAGRAM.exists() and "COOKIES_IG_B64" in os.environ:
+            try:
+                decoded = base64.b64decode(os.environ["COOKIES_IG_B64"]).decode("utf-8")
+                with open(COOKIES_INSTAGRAM, "w", encoding="utf-8") as f:
+                    f.write(decoded)
+                print("Cookies Instagram carregados do COOKIES_IG_B64 com sucesso!")
+            except Exception as e:
+                print("Erro ao decodificar COOKIES_IG_B64:", e)
+
         if COOKIES_INSTAGRAM.exists():
             ydl_opts["cookiefile"] = str(COOKIES_INSTAGRAM)
+
+        # Extrai info
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(clean_url, download=False)
-            return info.get("url") or info.get("requested_formats", [{}])[0].get("url")
+
+        # Retorna a URL direta do vídeo
+        if info.get("url"):
+            return info.get("url")
+        elif info.get("requested_formats"):
+            # Alguns stories/IGTV usam requested_formats
+            return info["requested_formats"][0].get("url")
+        elif info.get("entries"):
+            # Stories em lista
+            return info["entries"][0].get("url")
+        else:
+            return None
+
     except Exception as e:
         print("Erro ao extrair vídeo do Instagram:", e)
         return None
@@ -620,3 +652,4 @@ if __name__ == "__main__":
     # evita RuntimeError: This event loop é já executando
     nest_asyncio.apply()
     asyncio.get_event_loop().run_until_complete(main())
+
