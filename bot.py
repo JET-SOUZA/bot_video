@@ -13,6 +13,8 @@ from datetime import datetime, date
 from pathlib import Path
 from urllib.parse import unquote
 import re
+import secrets
+import time
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import (
@@ -26,6 +28,9 @@ from telegram.ext import (
 
 import yt_dlp
 import nest_asyncio
+
+# YT: import module
+from youtube_downloader import download_youtube_file
 
 # ---------------------------------------------------------
 # CONFIGURAÇÕES
@@ -53,6 +58,13 @@ ARQUIVO_CONTADOR = SCRIPT_DIR / "downloads.json"
 ARQUIVO_PREMIUM = SCRIPT_DIR / "premium.json"
 COOKIES_TIKTOK = SCRIPT_DIR / "cookies.txt"
 COOKIES_INSTAGRAM = SCRIPT_DIR / "cookies_ig.txt"
+
+# YT-specific counter file (separate)
+ARQUIVO_CONTADOR_YT = SCRIPT_DIR / "downloads_youtube.json"
+YT_FREE_LIMIT = 3  # free users: 3 downloads per day
+
+# in-memory pending map for callback tokens
+YT_PENDING = {}  # token -> {"url":..., "uid":..., "ts":...}
 
 # Carregar cookies TikTok
 if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
@@ -181,7 +193,7 @@ def verificar_pagamentos_asaas():
         print("Erro Asaas:", e)
 
 # ---------------------------------------------------------
-# LIMITE DIÁRIO
+# LIMITE DIÁRIO (Geral já existente)
 # ---------------------------------------------------------
 def verificar_limite(uid):
     data = load_json(ARQUIVO_CONTADOR)
@@ -208,6 +220,36 @@ def incrementar_download(uid):
         else:
             data[str(uid)]["downloads"] += 1
     save_json(ARQUIVO_CONTADOR, data)
+    return data[str(uid)]["downloads"]
+
+# ---------------------------------------------------------
+# LIMITE DIÁRIO YOUTUBE (separado)
+# ---------------------------------------------------------
+def verificar_limite_youtube(uid):
+    data = load_json(ARQUIVO_CONTADOR_YT)
+    hoje = str(date.today())
+    if str(uid) not in data:
+        data[str(uid)] = {"data": hoje, "downloads": 0}
+        save_json(ARQUIVO_CONTADOR_YT, data)
+        return 0
+    if data[str(uid)]["data"] != hoje:
+        data[str(uid)]["data"] = hoje
+        data[str(uid)]["downloads"] = 0
+        save_json(ARQUIVO_CONTADOR_YT, data)
+    return data[str(uid)]["downloads"]
+
+def incrementar_download_youtube(uid):
+    data = load_json(ARQUIVO_CONTADOR_YT)
+    hoje = str(date.today())
+    if str(uid) not in data:
+        data[str(uid)] = {"data": hoje, "downloads": 1}
+    else:
+        if data[str(uid)]["data"] != hoje:
+            data[str(uid)]["data"] = hoje
+            data[str(uid)]["downloads"] = 1
+        else:
+            data[str(uid)]["downloads"] += 1
+    save_json(ARQUIVO_CONTADOR_YT, data)
     return data[str(uid)]["downloads"]
 
 # ---------------------------------------------------------
@@ -390,6 +432,61 @@ def extrair_video_instagram(url):
         return None
 
 # ---------------------------------------------------------
+# YouTube menu & download flow (integrado, isolado)
+# ---------------------------------------------------------
+def _make_yt_token():
+    return secrets.token_hex(8)
+
+def _cleanup_pending():
+    """Remove tokens mais antigos que 20 minutos"""
+    now = time.time()
+    to_del = []
+    for k, v in list(YT_PENDING.items()):
+        if now - v.get("ts", 0) > 20 * 60:
+            to_del.append(k)
+    for k in to_del:
+        del YT_PENDING[k]
+
+def _build_yt_keyboard(token: str, is_premium_user: bool, used: int):
+    """
+    Monta teclado inline com todas as opções visíveis.
+    Free: 360, 480, MP3 clicáveis. Others show locked callback.
+    """
+    # visible layout: first row 360 480 MP3
+    row1 = [
+        InlineKeyboardButton("360p", callback_data=f"yt_start:{token}:360"),
+        InlineKeyboardButton("480p", callback_data=f"yt_start:{token}:480"),
+        InlineKeyboardButton("MP3", callback_data=f"yt_start:{token}:mp3"),
+    ]
+    # premium options (visible but locked in free)
+    if is_premium_user:
+        row2 = [
+            InlineKeyboardButton("720p", callback_data=f"yt_start:{token}:720"),
+            InlineKeyboardButton("1080p", callback_data=f"yt_start:{token}:1080"),
+            InlineKeyboardButton("2K", callback_data=f"yt_start:{token}:1440"),
+        ]
+        row3 = [
+            InlineKeyboardButton("4K", callback_data=f"yt_start:{token}:2160"),
+        ]
+    else:
+        row2 = [
+            InlineKeyboardButton("720p 🔒", callback_data=f"yt_locked"),
+            InlineKeyboardButton("1080p 🔒", callback_data=f"yt_locked"),
+            InlineKeyboardButton("2K 🔒", callback_data=f"yt_locked"),
+        ]
+        row3 = [
+            InlineKeyboardButton("4K 🔒", callback_data=f"yt_locked"),
+        ]
+    kb = [row1, row2, row3]
+    # small status row
+    if is_premium_user:
+        status = InlineKeyboardButton("🔓 Premium: downloads ilimitados", callback_data="yt_info")
+    else:
+        status = InlineKeyboardButton(f"🔢 YouTube: {used}/{YT_FREE_LIMIT} usados hoje", callback_data="yt_info")
+    kb.append([status])
+    return InlineKeyboardMarkup(kb)
+
+# ---------------------------------------------------------
 # DOWNLOAD HANDLER
 # ---------------------------------------------------------
 async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -401,11 +498,13 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     verificar_pagamentos_asaas()
 
+    # Check general limit (existing)
     if not is_premium(uid):
         usos = verificar_limite(uid)
         if usos >= LIMITE_DIARIO:
             return await update.message.reply_text("⚠️ Limite diário atingido.")
 
+    # Detect platform: Shopee / Instagram / YOUTUBE / others
     if any(x in url for x in ["shopee.com", "shp.ee", "sv.shopee.com"]):
         await update.message.reply_text("🔄 Processando link da Shopee...")
         video_url = extrair_video_shopee(url)
@@ -418,7 +517,18 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not video_url:
             return await update.message.reply_text("❌ Não foi possível extrair vídeo do Instagram (pode ser privado).")
         url = video_url
+    elif any(x in url for x in ["youtube.com", "youtu.be"]):
+        # YT flow: open menu (Model C)
+        _cleanup_pending()
+        token = _make_yt_token()
+        YT_PENDING[token] = {"url": url, "uid": uid, "ts": time.time()}
+        is_p = is_premium(uid)
+        used = verificar_limite_youtube(uid)
+        kb = _build_yt_keyboard(token, is_p, used)
+        await update.message.reply_text("🎯 Escolha a qualidade do YouTube:", reply_markup=kb)
+        return
 
+    # Existing generic downloader for other sites (or direct video URL)
     await update.message.reply_text("⏳ Baixando...")
 
     try:
@@ -470,21 +580,141 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Erro ao baixar: {e}")
 
 # ---------------------------------------------------------
-# CALLBACKQUERY HANDLER
+# CALLBACKQUERY HANDLER (extendido para YT)
 # ---------------------------------------------------------
 async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    data = (query.data or "").lower()
-    if data == "planos":
+    await query.answer()  # default ack (hidden)
+    data = (query.data or "")
+
+    # YT: locked handler
+    if data == "yt_locked":
+        # show alert to encourage upgrade
+        return await query.answer("⚠️ Esta qualidade está disponível apenas para usuários Premium.", show_alert=True)
+
+    if data == "yt_info":
+        return await query.answer("Informação: escolha a qualidade para iniciar o download.", show_alert=False)
+
+    # YT start pattern: 'yt_start:{token}:{quality}'
+    if data.startswith("yt_start:"):
+        parts = data.split(":")
+        if len(parts) != 3:
+            return await query.answer("Erro interno (callback inválido).", show_alert=True)
+        token = parts[1]
+        quality = parts[2]  # '360','480','720','1080','1440','2160','mp3'
+        pending = YT_PENDING.get(token)
+        if not pending:
+            return await query.answer("Sessão expirada. Envie o link novamente.", show_alert=True)
+        uid = pending.get("uid")
+        url = pending.get("url")
+        # ensure same user (prevent others using the button)
+        if query.from_user.id != uid:
+            return await query.answer("Esses botões não são para você.", show_alert=True)
+
+        # Check YT limit (unless premium)
+        if not is_premium(uid):
+            used = verificar_limite_youtube(uid)
+            if used >= YT_FREE_LIMIT:
+                return await query.answer("⚠️ Limite diário do YouTube atingido (3 downloads).", show_alert=True)
+
+        # Ack with waiting notice
+        await query.edit_message_text("⏳ Iniciando download... Por favor aguarde (isso pode levar alguns minutos).")
+
+        # Do the download in executor
+        to_mp3 = quality == "mp3"
+        # map quality names '1440' => '1440' etc.
+        selected_quality = quality
+
+        loop = asyncio.get_running_loop()
+
+        def _download_blocking():
+            try:
+                # pass cookiefile only if necessary; None for YouTube
+                path = download_youtube_file(url, quality=selected_quality, to_mp3=to_mp3, cookiefile=None)
+                return {"ok": True, "path": path}
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
+
+        result = await loop.run_in_executor(None, _download_blocking)
+
+        # After download
+        if not result["ok"]:
+            await query.edit_message_text(f"❌ Erro ao baixar: {result.get('error')}")
+            # remove pending token
+            try:
+                del YT_PENDING[token]
+            except:
+                pass
+            return
+
+        file_path = result["path"]
+
+        try:
+            if to_mp3 or (file_path.lower().endswith(".mp3")):
+                with open(file_path, "rb") as f:
+                    await context.bot.send_audio(chat_id=uid, audio=f, caption="✅ Seu MP3 do YouTube está pronto!")
+            else:
+                # try send_video, fallback to send_document
+                try:
+                    with open(file_path, "rb") as f:
+                        await context.bot.send_video(chat_id=uid, video=f, caption="✅ Seu vídeo do YouTube está pronto!")
+                except Exception:
+                    with open(file_path, "rb") as f:
+                        await context.bot.send_document(chat_id=uid, document=f, caption="✅ Seu vídeo do YouTube está pronto!")
+        except Exception as e:
+            await query.edit_message_text(f"❌ Não foi possível enviar o arquivo: {e}")
+            try:
+                del YT_PENDING[token]
+            except:
+                pass
+            # attempt cleanup
+            try:
+                os.remove(file_path)
+            except:
+                pass
+            return
+
+        # success -> increment counters
+        try:
+            if not is_premium(uid):
+                novo = incrementar_download_youtube(uid)
+                # also count in general downloads if you want to keep both counters (optional):
+                # incrementar_download(uid)
+                await context.bot.send_message(chat_id=uid, text=f"📊 YouTube uso: {novo}/{YT_FREE_LIMIT}")
+        except:
+            pass
+
+        # cleanup
+        try:
+            del YT_PENDING[token]
+        except:
+            pass
+        try:
+            os.remove(file_path)
+        except:
+            pass
+        # edit original message to final note
+        try:
+            await query.edit_message_text("✅ Download concluído e enviado!")
+        except:
+            pass
+        return
+
+    # fallback to existing callbacks (planos, duvida, addpremium, delpremium)
+    data_l = data.lower()
+    if data_l == "planos":
         await planos(update, context)
-    elif data == "duvida":
+    elif data_l == "duvida":
         await duvida(update, context)
-    elif data == "addpremium":
+    elif data_l == "addpremium":
         await addpremium(update, context)
-    elif data == "delpremium":
+    elif data_l == "delpremium":
         await delpremium(update, context)
     else:
-        await query.answer()
+        try:
+            await query.answer()
+        except:
+            pass
 
 # ---------------------------------------------------------
 # KEEPALIVE RENDER
