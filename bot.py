@@ -409,7 +409,7 @@ async def main():
     app.add_handler(CommandHandler("addpremium", addpremium))
     app.add_handler(CommandHandler("delpremium", delpremium))
     app.add_handler(CommandHandler("verpremium", verpremium))
-    app.add_handler(CommandHandler("download", download_command))  # novo
+    app.add_handler(CommandHandler("download", download_command))
 
     # CallbackQuery
     app.add_handler(CallbackQueryHandler(callbacks_handler))
@@ -419,9 +419,13 @@ async def main():
 
     print("Bot iniciado com sucesso!")
 
-    host = os.environ.get("RENDER_EXTERNAL_HOSTNAME") or os.environ.get("RENDER_EXTERNAL_URL")
+    # PEGAR HOST DO RENDER
+    host = (
+        os.environ.get("RENDER_EXTERNAL_HOSTNAME")
+        or os.environ.get("RENDER_EXTERNAL_URL")
+    )
 
-    # Roda webhook
+    # INICIAR WEBHOOK
     await app.start_webhook(
         listen="0.0.0.0",
         port=PORT,
@@ -429,6 +433,10 @@ async def main():
         webhook_url=f"https://{host}/webhook" if host else None,
     )
 
+    # Mantém o bot rodando
     await app.idle()
+if __name__ == "__main__":
+    asyncio.run(main())
+
 
 
