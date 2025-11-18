@@ -63,13 +63,23 @@ COOKIES_INSTAGRAM = SCRIPT_DIR / "cookies_ig.txt"
 ARQUIVO_CONTADOR_YT = SCRIPT_DIR / "downloads_youtube.json"
 YT_FREE_LIMIT = 3  # free users: 3 downloads per day
 
+# cookie path for YouTube (created at startup if COOKIES_YT_B64 exists)
+COOKIES_YOUTUBE = SCRIPT_DIR / "cookies_yt.txt"
+
 # in-memory pending map for callback tokens
 YT_PENDING = {}  # token -> {"url":..., "uid":..., "ts":...}
 
-# Carregar cookies TikTok
+# ---------------------------------------------------------
+# CARREGAR COOKIES (TikTok / Instagram / YouTube via B64)
+# ---------------------------------------------------------
+# Carregar cookies TikTok (env raw text)
 if "COOKIES_TIKTOK" in os.environ and not COOKIES_TIKTOK.exists():
-    with open(COOKIES_TIKTOK, "w", encoding="utf-8") as f:
-        f.write(os.environ["COOKIES_TIKTOK"])
+    try:
+        with open(COOKIES_TIKTOK, "w", encoding="utf-8") as f:
+            f.write(os.environ["COOKIES_TIKTOK"])
+        print("Cookies TikTok carregados do env COOKIES_TIKTOK.")
+    except Exception as e:
+        print("Erro ao gravar COOKIES_TIKTOK:", e)
 
 # Carregar cookies Instagram Base64
 if "COOKIES_IG_B64" in os.environ:
@@ -81,7 +91,7 @@ if "COOKIES_IG_B64" in os.environ:
     except Exception as e:
         print("Erro ao decodificar COOKIES_IG_B64:", e)
 
-# Fallback legacy
+# Fallback legacy for Instagram cookie env
 if "COOKIES_INSTAGRAM" in os.environ and not COOKIES_INSTAGRAM.exists():
     try:
         with open(COOKIES_INSTAGRAM, "w", encoding="utf-8") as f:
@@ -89,6 +99,25 @@ if "COOKIES_INSTAGRAM" in os.environ and not COOKIES_INSTAGRAM.exists():
         print("Cookies Instagram carregados do env COOKIES_INSTAGRAM.")
     except Exception as e:
         print("Erro ao gravar COOKIES_INSTAGRAM:", e)
+
+# Carrega cookies do YouTube a partir de variável COOKIES_YT_B64 (se existir)
+def load_youtube_cookies_from_env():
+    """
+    Decodifica COOKIES_YT_B64 e grava em COOKIES_YOUTUBE (cookies_yt.txt).
+    Retorna str(path) se gravado, else None.
+    """
+    b64 = os.environ.get("COOKIES_YT_B64")
+    if not b64:
+        return None
+    try:
+        data = base64.b64decode(b64)
+        with open(COOKIES_YOUTUBE, "wb") as f:
+            f.write(data)
+        print("Cookies YouTube carregados a partir de COOKIES_YT_B64.")
+        return str(COOKIES_YOUTUBE)
+    except Exception as e:
+        print("Erro ao decodificar/gravar COOKIES_YT_B64:", e)
+        return None
 
 # ---------------------------------------------------------
 # FUNÇÕES JSON
@@ -627,10 +656,13 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         loop = asyncio.get_running_loop()
 
+        # determine cookiefile path (if exists)
+        cookiefile_path = str(COOKIES_YOUTUBE) if COOKIES_YOUTUBE.exists() else None
+
         def _download_blocking():
             try:
-                # pass cookiefile only if necessary; None for YouTube
-                path = download_youtube_file(url, quality=selected_quality, to_mp3=to_mp3, cookiefile=None)
+                # pass cookiefile if available
+                path = download_youtube_file(url, quality=selected_quality, to_mp3=to_mp3, cookiefile=cookiefile_path)
                 return {"ok": True, "path": path}
             except Exception as e:
                 return {"ok": False, "error": str(e)}
@@ -678,8 +710,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             if not is_premium(uid):
                 novo = incrementar_download_youtube(uid)
-                # also count in general downloads if you want to keep both counters (optional):
-                # incrementar_download(uid)
+                # Note: se quiser também contar no contador geral, chame incrementar_download(uid)
                 await context.bot.send_message(chat_id=uid, text=f"📊 YouTube uso: {novo}/{YT_FREE_LIMIT}")
         except:
             pass
@@ -734,7 +765,12 @@ async def keepalive_task():
 # MAIN
 # ---------------------------------------------------------
 async def main():
+    # load asaas/premium status
     verificar_pagamentos_asaas()
+
+    # create/load youtube cookies from ENV if present
+    load_youtube_cookies_from_env()
+
     app = Application.builder().token(TOKEN).build()
 
     await app.bot.set_my_commands([
@@ -764,6 +800,7 @@ async def main():
     if not host:
         print("Aviso: RENDER_EXTERNAL_HOSTNAME/RENDER_EXTERNAL_URL não definido; webhook_url pode estar incorreto.")
 
+    # run webhook (PTB)
     await app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
@@ -775,5 +812,7 @@ async def main():
 # EXECUÇÃO
 # ---------------------------------------------------------
 if __name__ == "__main__":
+    # apply nest_asyncio (mantive pois já estava presente)
     nest_asyncio.apply()
-    asyncio.get_event_loop().run_until_complete(main())
+    # use asyncio.run to avoid RuntimeError: Cannot close a running event loop
+    asyncio.run(main())
