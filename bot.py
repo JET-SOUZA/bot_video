@@ -809,17 +809,10 @@ async def main():
     )
 
 # ---------------------------------------------------------
-# EXECUÇÃO (CORRETO PARA RENDER + WEBHOOK)
+# EXECUÇÃO CORRIGIDA (COMPATÍVEL COM PTB20 + RENDER)
 # ---------------------------------------------------------
 if __name__ == "__main__":
     import asyncio
 
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-    loop.run_until_complete(main())
-    loop.run_forever()
-
+    # PTB 20 + webhook no Render exige APENAS isso:
+    asyncio.run(main())
