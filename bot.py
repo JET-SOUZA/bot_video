@@ -812,7 +812,6 @@ async def main():
 # EXECUÇÃO
 # ---------------------------------------------------------
 if __name__ == "__main__":
-    # apply nest_asyncio (mantive pois já estava presente)
-    nest_asyncio.apply()
-    # use asyncio.run to avoid RuntimeError: Cannot close a running event loop
+    import asyncio
     asyncio.run(main())
+
