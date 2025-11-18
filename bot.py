@@ -409,6 +409,7 @@ async def main():
     app.add_handler(CommandHandler("addpremium", addpremium))
     app.add_handler(CommandHandler("delpremium", delpremium))
     app.add_handler(CommandHandler("verpremium", verpremium))
+    app.add_handler(CommandHandler("download", download_command))  # novo
 
     # CallbackQuery
     app.add_handler(CallbackQueryHandler(callbacks_handler))
@@ -417,15 +418,17 @@ async def main():
     asyncio.create_task(keepalive_task())
 
     print("Bot iniciado com sucesso!")
-    await app.start()
-    await app.updater.start_polling()
-    await app.updater.idle()
 
-# ---------------------------------------------------------
-# EXECUÇÃO
-# ---------------------------------------------------------
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("Bot finalizado pelo usuário.")
+    host = os.environ.get("RENDER_EXTERNAL_HOSTNAME") or os.environ.get("RENDER_EXTERNAL_URL")
+
+    # Roda webhook
+    await app.start_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path="webhook",
+        webhook_url=f"https://{host}/webhook" if host else None,
+    )
+
+    await app.idle()
+
+
