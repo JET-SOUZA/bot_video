@@ -1,89 +1,63 @@
 # youtube_downloader.py
-import os
+# Lightweight YouTube downloader WITHOUT MERGE (Render-safe)
+# Downloads only one stream directly (video-only, audio-only, or mixed)
+
 import yt_dlp
+import os
 from pathlib import Path
 from datetime import datetime
 
-SCRIPT_DIR = Path(__file__).parent.resolve()
-DOWNLOAD_DIR = SCRIPT_DIR / "downloads" / "youtube"
-DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-def _format_for_quality(quality):
+def download_youtube_file(url, quality="360", to_mp3=False, cookiefile=None):
     """
-    Retorna format correto para cada qualidade:
-    360, 480, 720, 1080, 1440, 2160, mp3
+    Render-SAFE YouTube downloader.
+    - No ffmpeg
+    - No merge
+    - Downloads only one direct stream
     """
-    if quality == "mp3":
-        return "bestaudio/best"
 
-    try:
-        h = int(quality)
-    except:
-        return "bestvideo+bestaudio/best"
+    ts = datetime.now().strftime("%Y%m%d%H%M%S")
+    outdir = Path("downloads")
+    outdir.mkdir(exist_ok=True)
 
-    # match exato da resolução + garantir MP4
-    return f"bestvideo[height={h}][ext=mp4]+bestaudio[ext=m4a]/best"
+    # Saída segura (sem depender de ID do YouTube)
+    if to_mp3:
+        filename = outdir / f"yt-{ts}.%(ext)s"
+    else:
+        filename = outdir / f"yt-{quality}-{ts}.%(ext)s"
 
-
-def download_youtube_file(url: str, quality: str = "480", to_mp3: bool = False, cookiefile: str = None):
-    """
-    Faz download bloqueante. Retorna caminho absoluto.
-    """
-    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    safe_title = "%(title)s"
-    outtmpl = str(DOWNLOAD_DIR / f"{safe_title}-{timestamp}.%(ext)s")
-
-    ydl_opts = {
-        "outtmpl": outtmpl,
-        "format": _format_for_quality(quality if not to_mp3 else "mp3"),
-        "noplaylist": True,
-        "quiet": True,
-        "no_warnings": True,
-        "merge_output_format": "mp4",
-        "postprocessor_args": ["-movflags", "faststart"],
+    # Mapeamento de qualidades diretamente do YouTube (sem merge)
+    FORMATS = {
+        "mp3": "bestaudio/best",
+        "360": "best[height<=360][ext=mp4]/best[height<=360]",
+        "480": "best[height<=480][ext=mp4]/best[height<=480]",
+        "720": "best[height<=720]/bestvideo[height<=720]",
+        "1080": "best[height<=1080]/bestvideo[height<=1080]",
+        "1440": "best[height<=1440]/bestvideo[height<=1440]",
+        "2160": "best[height<=2160]/bestvideo[height<=2160]",
     }
 
-    # SEMPRE usar cookies se existir
-    if cookiefile and os.path.exists(cookiefile):
+    selected_format = FORMATS.get(quality, FORMATS["360"])
+
+    ydl_opts = {
+        "outtmpl": str(filename),
+        "format": selected_format,
+        "quiet": True,
+        "noplaylist": True,
+        "nocheckcertificate": True,
+    }
+
+    # Cookies (se existirem)
+    if cookiefile:
         ydl_opts["cookiefile"] = cookiefile
 
-    # MP3 mode
-    if to_mp3 or quality == "mp3":
+    # Se for MP3 → baixar só o áudio (sem converter)
+    if to_mp3:
         ydl_opts["format"] = "bestaudio/best"
-        ydl_opts.pop("merge_output_format", None)  # evitar erro
-        ydl_opts["postprocessors"] = [
-            {
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "192",
-            },
-            {"key": "FFmpegMetadata"},
-        ]
 
-    else:
-        # garantir pós-processamento correto para vídeo
-        ydl_opts.setdefault(
-            "postprocessors",
-            [
-                {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"},
-                {"key": "FFmpegMetadata"},
-            ]
-        )
-
-    # Execute download
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
 
-        # playlist fallback
-        if "entries" in info:
-            info = info["entries"][0]
+    final_path = ydl.prepare_filename(info)
 
-        filepath = ydl.prepare_filename(info)
-
-        # Ajuste MP3
-        if (to_mp3 or quality == "mp3") and not filepath.lower().endswith(".mp3"):
-            alt = os.path.splitext(filepath)[0] + ".mp3"
-            if os.path.exists(alt):
-                filepath = alt
-
-        return filepath
+    return final_path
