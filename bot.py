@@ -762,13 +762,10 @@ async def keepalive_task():
         await asyncio.sleep(300)
 
 # ---------------------------------------------------------
-# MAIN
+# MAIN (CORRIGIDO - NÃO INICIA WEBHOOK)
 # ---------------------------------------------------------
 async def main():
-    # load asaas/premium status
     verificar_pagamentos_asaas()
-
-    # create/load youtube cookies from ENV if present
     load_youtube_cookies_from_env()
 
     app = Application.builder().token(TOKEN).build()
@@ -796,23 +793,22 @@ async def main():
     asyncio.create_task(keepalive_task())
 
     print(f"Iniciando bot (webhook) na porta {PORT}...")
-    host = os.environ.get("RENDER_EXTERNAL_HOSTNAME") or os.environ.get("RENDER_EXTERNAL_URL")
-    if not host:
-        print("Aviso: RENDER_EXTERNAL_HOSTNAME/RENDER_EXTERNAL_URL não definido; webhook_url pode estar incorreto.")
 
-    # run webhook (PTB)
-    await app.run_webhook(
+    return app    # <-- IMPORTANTE!
+
+# ---------------------------------------------------------
+# EXECUÇÃO CORRETA PARA RENDER + PTB20
+# ---------------------------------------------------------
+if __name__ == "__main__":
+    import asyncio
+
+    app = asyncio.run(main())
+
+    host = os.environ.get("RENDER_EXTERNAL_HOSTNAME") or os.environ.get("RENDER_EXTERNAL_URL")
+
+    app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
         url_path="webhook",
         webhook_url=f"https://{host}/webhook" if host else None,
     )
-
-# ---------------------------------------------------------
-# EXECUÇÃO CORRIGIDA (COMPATÍVEL COM PTB20 + RENDER)
-# ---------------------------------------------------------
-if __name__ == "__main__":
-    import asyncio
-
-    # PTB 20 + webhook no Render exige APENAS isso:
-    asyncio.run(main())
