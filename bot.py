@@ -645,75 +645,93 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             used = verificar_limite_youtube(uid)
             if used >= YT_FREE_LIMIT:
                 return await query.answer("⚠️ Limite diário do YouTube atingido (3 downloads).", show_alert=True)
+# -------- PLANOS / SUPORTE / ADMIN BUTTONS ----------
+async def callbacks_handler(update: Update, context: CallbackContext):
+    query = update.callback_query
+    data = query.data
+    uid = query.from_user.id
 
-                 # --- DOWNLOAD DO YOUTUBE ------------------------------------
-selected_quality = quality
-to_mp3 = (selected_quality == "mp3")
-
-# Mensagem de espera
-msg = await query.message.reply_text("⏳ Iniciando download... Por favor aguarde...")
-
-cookiefile_path = str(COOKIES_YOUTUBE) if COOKIES_YOUTUBE.exists() else None
-loop = asyncio.get_running_loop()
-
-def _download_blocking():
-    try:
-        path = download_youtube_file(
-            url,
-            quality=selected_quality,
-            to_mp3=to_mp3,
-            cookiefile=cookiefile_path
-        )
-        return {"ok": True, "path": path}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-result = await loop.run_in_executor(None, _download_blocking)
-
-if not result["ok"]:
-    await msg.edit_text(f"❌ Erro ao baixar: {result.get('error', 'erro desconhecido')}")
-    return
-
-filepath = result["path"]
-if not filepath or not os.path.exists(filepath):
-    await msg.edit_text("❌ O download falhou (arquivo não encontrado).")
-    return
-
-# Envia o arquivo
-try:
-    with open(filepath, "rb") as f:
-        if to_mp3:
-            await query.message.reply_audio(f, title="Seu áudio 🎵")
-        else:
-            await query.message.reply_video(f, caption="✅ Seu vídeo está aqui!")
-except Exception as e:
-    await query.message.reply_text(f"❌ Erro ao enviar arquivo: {e}")
-
-# Remove arquivo
-try:
-    os.remove(filepath)
-except:
-    pass
-
-# Incrementa limite
-if not is_premium(uid):
-    novo = incrementar_download_youtube(uid)
-    await query.message.reply_text(f"📊 YouTube: {novo}/{YT_FREE_LIMIT}")
-
-return
-
-    # -------- PLANOS / SUPORTE / ADMIN BUTTONS ----------
+    # PLANOS
     if data == "planos":
         return await planos(update, context)
 
+    # DÚVIDAS
     if data == "duvida":
         return await duvida(update, context)
 
+    # ADMIN: ADD PREMIUM
     if data == "addpremium":
         return await query.message.reply_text("Use: /addpremium <user_id>")
 
+    # ADMIN: DEL PREMIUM
     if data == "delpremium":
         return await query.message.reply_text("Use: /delpremium <user_id>")
+
+    # ---------------------------------------------------------
+    # BOTÃO DE DOWNLOAD DO YOUTUBE (QUALIDADE)
+    # ---------------------------------------------------------
+    if data.startswith("yt_"):
+        quality = data.replace("yt_", "")
+        url = context.user_data.get("last_url")
+
+        if not url:
+            return await query.edit_message_text("❌ URL não encontrada. Envie novamente o link do YouTube.")
+
+        selected_quality = quality
+        to_mp3 = (selected_quality == "mp3")
+
+        # Mensagem de espera
+        msg = await query.message.reply_text("⏳ Iniciando download... Por favor aguarde...")
+
+        cookiefile_path = str(COOKIES_YOUTUBE) if COOKIES_YOUTUBE.exists() else None
+        loop = asyncio.get_running_loop()
+
+        def _download_blocking():
+            try:
+                path = download_youtube_file(
+                    url,
+                    quality=selected_quality,
+                    to_mp3=to_mp3,
+                    cookiefile=cookiefile_path
+                )
+                return {"ok": True, "path": path}
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
+
+        result = await loop.run_in_executor(None, _download_blocking)
+
+        if not result["ok"]:
+            await msg.edit_text(f"❌ Erro ao baixar: {result.get('error', 'erro desconhecido')}")
+            return
+
+        filepath = result["path"]
+        if not filepath or not os.path.exists(filepath):
+            await msg.edit_text("❌ O download falhou (arquivo não encontrado).")
+            return
+
+        # Envia o arquivo
+        try:
+            with open(filepath, "rb") as f:
+                if to_mp3:
+                    await query.message.reply_audio(f, title="Seu áudio 🎵")
+                else:
+                    await query.message.reply_video(f, caption="✅ Seu vídeo está aqui!")
+        except Exception as e:
+            await query.message.reply_text(f"❌ Erro ao enviar arquivo: {e}")
+
+        # Remove arquivo temporário
+        try:
+            os.remove(filepath)
+        except:
+            pass
+
+        # Incrementa limite
+        if not is_premium(uid):
+            novo = incrementar_download_youtube(uid)
+            await query.message.reply_text(f"📊 YouTube: {novo}/{YT_FREE_LIMIT}")
+
+        return
+
 
 # ---------------------------------------------------------
 # MANTER VIVO NO RENDER
@@ -731,6 +749,7 @@ async def keepalive_task():
             pass
         await asyncio.sleep(240)  # 4 min
 
+
 # ---------------------------------------------------------
 # MAIN
 # ---------------------------------------------------------
@@ -747,13 +766,13 @@ async def main():
     app.add_handler(CommandHandler("verpremium", verpremium))
     app.add_handler(CommandHandler("meuid", meuid))
 
-    # Message handler for URLs
+    # Mensagens
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
 
-    # Callback handler (YouTube + menu)
+    # Callback handler (botões YouTube + menu)
     app.add_handler(CallbackQueryHandler(callbacks_handler))
 
-    # Start webhook
+    # Webhook
     port = PORT
     url = os.environ.get("RENDER_EXTERNAL_URL")
 
@@ -770,12 +789,15 @@ async def main():
         webhook_url=f"{url}/{TOKEN}",
     )
 
+
 # ---------------------------------------------------------
 # RUN
 # ---------------------------------------------------------
 if __name__ == "__main__":
     nest_asyncio.apply()
     asyncio.run(main())
+
+
 
 
 
