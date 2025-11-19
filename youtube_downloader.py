@@ -10,28 +10,19 @@ DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _format_for_quality(quality):
-    """
-    Retorna string de format do yt-dlp para a quality pedida.
-    quality: '360', '480', '720', '1080', '1440', '2160', 'mp3'
-    """
-
+    """Retorna o format adequado ao nível pedido."""
     if quality == "mp3":
         return "bestaudio/best"
 
     try:
         h = int(quality)
     except:
-        # fallback universal seguro
         return "bv*+ba/b"
 
-    # formato correto e estável
     return f"bv*[height<={h}]+ba/b"
 
 
 def download_youtube_file(url: str, quality: str = "480", to_mp3: bool = False, cookiefile: str = None):
-    """
-    Faz o download (bloqueante). Retorna caminho absoluto do arquivo final.
-    """
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     safe_title = "%(title)s"
     outtmpl = str(DOWNLOAD_DIR / f"{safe_title}-{timestamp}.%(ext)s")
@@ -43,11 +34,20 @@ def download_youtube_file(url: str, quality: str = "480", to_mp3: bool = False, 
         "quiet": True,
         "no_warnings": True,
 
-        # força MP4 quando possível (não quebra webm)
         "merge_output_format": "mp4",
-
-        # melhora compatibilidade com players
         "postprocessor_args": ["-movflags", "faststart"],
+
+        # 🔥 Aceleração real:
+        "concurrent_fragment_downloads": True,
+        "concurrent_fragment_downloads_count": 10,
+        "fragment_retries": 999,
+        "retries": 999,
+
+        # 🔥 Melhor conexão FFmpeg
+        "downloader": "ffmpeg",
+        "downloader_args": {
+            "ffmpeg_i": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
+        },
     }
 
     if cookiefile:
@@ -66,8 +66,8 @@ def download_youtube_file(url: str, quality: str = "480", to_mp3: bool = False, 
         ]
 
     else:
-        # converte vídeo para MP4 corretamente
-      ydl_opts["postprocessors"] = [
+        # --- Conversão correta para MP4 ---
+         ydl_opts["postprocessors"] = [
     {
         "key": "FFmpegVideoConvertor",
         "preferedformat": "mp4"   # <- correto (com 1 'r')
@@ -75,8 +75,7 @@ def download_youtube_file(url: str, quality: str = "480", to_mp3: bool = False, 
     {"key": "FFmpegMetadata"}
 ]
 
-
-    # Executa download
+    # Executa o download
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
 
@@ -85,7 +84,7 @@ def download_youtube_file(url: str, quality: str = "480", to_mp3: bool = False, 
 
         filepath = ydl.prepare_filename(info)
 
-        # Corrige saída MP3
+        # Ajuste caso MP3
         if (to_mp3 or quality == "mp3") and not filepath.lower().endswith(".mp3"):
             mp3 = os.path.splitext(filepath)[0] + ".mp3"
             if os.path.exists(mp3):
