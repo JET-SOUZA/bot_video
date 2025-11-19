@@ -669,150 +669,111 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         result = await loop.run_in_executor(None, _download_blocking)
 
-        # After download
+               # After download
         if not result["ok"]:
-            await query.edit_message_text(f"❌ Erro ao baixar: {result.get('error')}")
-            # remove pending token
-            try:
-                del YT_PENDING[token]
-            except:
-                pass
+            await query.edit_message_text(f"❌ Erro ao baixar: {result.get('error', 'erro desconhecido')}")
             return
 
-        file_path = result["path"]
+        # send file
+        filepath = result["path"]
+        if not filepath or not os.path.exists(filepath):
+            await query.edit_message_text("❌ O download falhou (arquivo não encontrado).")
+            return
 
         try:
-            if to_mp3 or (file_path.lower().endswith(".mp3")):
-                with open(file_path, "rb") as f:
-                    await context.bot.send_audio(chat_id=uid, audio=f, caption="✅ Seu MP3 do YouTube está pronto!")
-            else:
-                # try send_video, fallback to send_document
-                try:
-                    with open(file_path, "rb") as f:
-                        await context.bot.send_video(chat_id=uid, video=f, caption="✅ Seu vídeo do YouTube está pronto!")
-                except Exception:
-                    with open(file_path, "rb") as f:
-                        await context.bot.send_document(chat_id=uid, document=f, caption="✅ Seu vídeo do YouTube está pronto!")
+            with open(filepath, "rb") as f:
+                if to_mp3:
+                    await query.message.reply_audio(f, title="Seu áudio 🎵")
+                else:
+                    await query.message.reply_video(f, caption="✅ Seu vídeo está aqui!")
         except Exception as e:
-            await query.edit_message_text(f"❌ Não foi possível enviar o arquivo: {e}")
-            try:
-                del YT_PENDING[token]
-            except:
-                pass
-            # attempt cleanup
-            try:
-                os.remove(file_path)
-            except:
-                pass
-            return
+            await query.message.reply_text(f"❌ Erro ao enviar arquivo: {e}")
 
-        # success -> increment counters
+        # cleanup local file
         try:
-            if not is_premium(uid):
-                novo = incrementar_download_youtube(uid)
-                # Note: se quiser também contar no contador geral, chame incrementar_download(uid)
-                await context.bot.send_message(chat_id=uid, text=f"📊 YouTube uso: {novo}/{YT_FREE_LIMIT}")
+            os.remove(filepath)
         except:
             pass
 
-        # cleanup
-        try:
-            del YT_PENDING[token]
-        except:
-            pass
-        try:
-            os.remove(file_path)
-        except:
-            pass
-        # edit original message to final note
-        try:
-            await query.edit_message_text("✅ Download concluído e enviado!")
-        except:
-            pass
+        # increment YT counter if free
+        if not is_premium(uid):
+            novo = incrementar_download_youtube(uid)
+            await query.message.reply_text(f"📊 YouTube: {novo}/{YT_FREE_LIMIT}")
+
         return
 
-    # fallback to existing callbacks (planos, duvida, addpremium, delpremium)
-    data_l = data.lower()
-    if data_l == "planos":
-        await planos(update, context)
-    elif data_l == "duvida":
-        await duvida(update, context)
-    elif data_l == "addpremium":
-        await addpremium(update, context)
-    elif data_l == "delpremium":
-        await delpremium(update, context)
-    else:
-        try:
-            await query.answer()
-        except:
-            pass
+    # -------- PLANOS / SUPORTE / ADMIN BUTTONS ----------
+    if data == "planos":
+        return await planos(update, context)
+
+    if data == "duvida":
+        return await duvida(update, context)
+
+    if data == "addpremium":
+        return await query.message.reply_text("Use: /addpremium <user_id>")
+
+    if data == "delpremium":
+        return await query.message.reply_text("Use: /delpremium <user_id>")
 
 # ---------------------------------------------------------
-# KEEPALIVE RENDER
+# MANTER VIVO NO RENDER
 # ---------------------------------------------------------
 async def keepalive_task():
-    await asyncio.sleep(5)
     while True:
         try:
-            host = os.environ.get("RENDER_EXTERNAL_HOSTNAME") or os.environ.get("RENDER_EXTERNAL_URL")
-            if host:
-                requests.get(f"https://{host}/webhook", timeout=5)
+            url = os.environ.get("RENDER_EXTERNAL_URL") or ""
+            if url:
+                try:
+                    requests.get(url, timeout=5)
+                except:
+                    pass
         except:
             pass
-        await asyncio.sleep(300)
+        await asyncio.sleep(240)  # 4 min
 
 # ---------------------------------------------------------
 # MAIN
 # ---------------------------------------------------------
 async def main():
-    # load asaas/premium status
     verificar_pagamentos_asaas()
-
-    # create/load youtube cookies from ENV if present
     load_youtube_cookies_from_env()
 
     app = Application.builder().token(TOKEN).build()
 
-    await app.bot.set_my_commands([
-        BotCommand("start", "Iniciar bot"),
-        BotCommand("planos", "Planos premium"),
-        BotCommand("duvida", "Ajuda"),
-        BotCommand("meuid", "Mostrar ID"),
-        BotCommand("addpremium", "Adicionar premium (admin)"),
-        BotCommand("delpremium", "Remover premium (admin)"),
-        BotCommand("verpremium", "Visualizar premium (admin)"),
-    ])
-
+    # Commands
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("planos", planos))
-    app.add_handler(CommandHandler("duvida", duvida))
-    app.add_handler(CommandHandler("meuid", meuid))
     app.add_handler(CommandHandler("addpremium", addpremium))
     app.add_handler(CommandHandler("delpremium", delpremium))
     app.add_handler(CommandHandler("verpremium", verpremium))
-    app.add_handler(CallbackQueryHandler(callbacks_handler))
+    app.add_handler(CommandHandler("meuid", meuid))
+
+    # Message handler for URLs
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
 
-    asyncio.create_task(keepalive_task())
+    # Callback handler (YouTube + menu)
+    app.add_handler(CallbackQueryHandler(callbacks_handler))
 
-    print(f"Iniciando bot (webhook) na porta {PORT}...")
-    host = os.environ.get("RENDER_EXTERNAL_HOSTNAME") or os.environ.get("RENDER_EXTERNAL_URL")
-    if not host:
-        print("Aviso: RENDER_EXTERNAL_HOSTNAME/RENDER_EXTERNAL_URL não definido; webhook_url pode estar incorreto.")
+    # Start webhook
+    port = PORT
+    url = os.environ.get("RENDER_EXTERNAL_URL")
 
-    # run webhook (PTB)
+    if not url:
+        print("Rodando LOCAL (Polling)...")
+        await app.run_polling()
+        return
+
+    print(f"Iniciando bot (webhook) na porta {port}...")
     await app.run_webhook(
         listen="0.0.0.0",
-        port=PORT,
-        url_path="webhook",
-        webhook_url=f"https://{host}/webhook" if host else None,
+        port=port,
+        url_path=TOKEN,
+        webhook_url=f"{url}/{TOKEN}",
     )
 
 # ---------------------------------------------------------
-# EXECUÇÃO
+# RUN
 # ---------------------------------------------------------
 if __name__ == "__main__":
-    # apply nest_asyncio (mantive pois já estava presente)
     nest_asyncio.apply()
-    # use asyncio.run to avoid RuntimeError: Cannot close a running event loop
     asyncio.run(main())
+
