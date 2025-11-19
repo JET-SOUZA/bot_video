@@ -8,27 +8,29 @@ SCRIPT_DIR = Path(__file__).parent.resolve()
 DOWNLOAD_DIR = SCRIPT_DIR / "downloads" / "youtube"
 DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
+
 def _format_for_quality(quality):
     """
     Retorna string de format do yt-dlp para a quality pedida.
     quality: '360', '480', '720', '1080', '1440', '2160', 'mp3'
     """
+
     if quality == "mp3":
         return "bestaudio/best"
+
     try:
         h = int(quality)
     except:
-        return "bestvideo+bestaudio/best"
-    # combine best video up to height + best audio
-    return f"bestvideo[height<={h}]+bestaudio/best"
+        # fallback universal seguro
+        return "bv*+ba/b"
+
+    # formato correto e estável
+    return f"bv*[height<={h}]+ba/b"
+
 
 def download_youtube_file(url: str, quality: str = "480", to_mp3: bool = False, cookiefile: str = None):
     """
     Faz o download (bloqueante). Retorna caminho absoluto do arquivo final.
-    - url: link do YouTube
-    - quality: '360', '480', '720', '1080', '1440', '2160' ou 'mp3'
-    - to_mp3: True -> extrai mp3
-    - cookiefile: caminho opcional para cookie
     """
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     safe_title = "%(title)s"
@@ -40,15 +42,18 @@ def download_youtube_file(url: str, quality: str = "480", to_mp3: bool = False, 
         "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
+
+        # força MP4 quando possível (não quebra webm)
         "merge_output_format": "mp4",
+
+        # melhora compatibilidade com players
         "postprocessor_args": ["-movflags", "faststart"],
     }
 
-    # If cookies provided (e.g., TikTok/Instagram) - not commonly needed for youtube
     if cookiefile:
         ydl_opts["cookiefile"] = cookiefile
 
-    # If mp3 requested, add audio extractor postprocessor
+    # --- MP3 ---
     if to_mp3 or quality == "mp3":
         ydl_opts["format"] = "bestaudio/best"
         ydl_opts["postprocessors"] = [
@@ -59,25 +64,30 @@ def download_youtube_file(url: str, quality: str = "480", to_mp3: bool = False, 
             },
             {"key": "FFmpegMetadata"},
         ]
-        # output filename extension will be .mp3 by prepare_filename for audio extractor
-    else:
-        # ensure we try to convert/remux to mp4 for video
-        ydl_opts.setdefault("postprocessors", [
-            {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"},
-            {"key": "FFmpegMetadata"},
-        ])
 
-    # run download
+    else:
+        # converte vídeo para MP4 corretamente
+        ydl_opts["postprocessors"] = [
+            {
+                "key": "FFmpegVideoConvertor",
+                "preferredformat": "mp4"   # <- corrigido
+            },
+            {"key": "FFmpegMetadata"}
+        ]
+
+    # Executa download
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
-        # handle playlist/extractors
+
         if "entries" in info and info["entries"]:
             info = info["entries"][0]
+
         filepath = ydl.prepare_filename(info)
-        # If mp3 we need to replace extension (yt-dlp will produce .mp3)
+
+        # Corrige saída MP3
         if (to_mp3 or quality == "mp3") and not filepath.lower().endswith(".mp3"):
-            # attempt to find .mp3 sibling
-            possible = os.path.splitext(filepath)[0] + ".mp3"
-            if os.path.exists(possible):
-                filepath = possible
+            mp3 = os.path.splitext(filepath)[0] + ".mp3"
+            if os.path.exists(mp3):
+                filepath = mp3
+
         return filepath
