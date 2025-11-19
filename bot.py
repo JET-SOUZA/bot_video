@@ -646,69 +646,69 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if used >= YT_FREE_LIMIT:
                 return await query.answer("⚠️ Limite diário do YouTube atingido (3 downloads).", show_alert=True)
 
-            # --- DOWNLOAD DO YOUTUBE ------------------------------------
-if data.startswith("yt_"):
-    selected_quality = data.replace("yt_", "").strip()
-    to_mp3 = (selected_quality == "mp3")
+                   # --- DOWNLOAD DO YOUTUBE ------------------------------------
+        if data.startswith("yt_"):
+            selected_quality = data.replace("yt_", "").strip()
+            to_mp3 = (selected_quality == "mp3")
 
-    url = context.user_data.get("yt_url")
-    uid = update.effective_user.id
+            url = context.user_data.get("yt_url")
+            uid = update.effective_user.id
 
-    if not url:
-        await query.edit_message_text("❌ URL não encontrada. Envie novamente o link do YouTube.")
-        return
+            if not url:
+                await query.edit_message_text("❌ URL não encontrada. Envie novamente o link do YouTube.")
+                return
 
-    # Mensagem de espera
-    msg = await update.message.reply_text("⏳ Iniciando download... Por favor aguarde...")
+            # Mensagem de espera
+            msg = await query.message.reply_text("⏳ Iniciando download... Por favor aguarde...")
 
-    cookiefile_path = str(COOKIES_YOUTUBE) if COOKIES_YOUTUBE.exists() else None
-    loop = asyncio.get_running_loop()
+            cookiefile_path = str(COOKIES_YOUTUBE) if COOKIES_YOUTUBE.exists() else None
+            loop = asyncio.get_running_loop()
 
-    def _download_blocking():
-        try:
-            path = download_youtube_file(
-                url,
-                quality=selected_quality,
-                to_mp3=to_mp3,
-                cookiefile=cookiefile_path
-            )
-            return {"ok": True, "path": path}
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
+            def _download_blocking():
+                try:
+                    path = download_youtube_file(
+                        url,
+                        quality=selected_quality,
+                        to_mp3=to_mp3,
+                        cookiefile=cookiefile_path
+                    )
+                    return {"ok": True, "path": path}
+                except Exception as e:
+                    return {"ok": False, "error": str(e)}
 
-    result = await loop.run_in_executor(None, _download_blocking)
+            result = await loop.run_in_executor(None, _download_blocking)
 
-    if not result["ok"]:
-        await msg.edit_text(f"❌ Erro ao baixar: {result.get('error', 'erro desconhecido')}")
-        return
+            if not result["ok"]:
+                await msg.edit_text(f"❌ Erro ao baixar: {result.get('error', 'erro desconhecido')}")
+                return
 
-    filepath = result["path"]
-    if not filepath or not os.path.exists(filepath):
-        await msg.edit_text("❌ O download falhou (arquivo não encontrado).")
-        return
+            filepath = result["path"]
+            if not filepath or not os.path.exists(filepath):
+                await msg.edit_text("❌ O download falhou (arquivo não encontrado).")
+                return
 
-    # Envia o arquivo
-    try:
-        with open(filepath, "rb") as f:
-            if to_mp3:
-                await update.message.reply_audio(f, title="Seu áudio 🎵")
-            else:
-                await update.message.reply_video(f, caption="✅ Seu vídeo está aqui!")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Erro ao enviar arquivo: {e}")
+            # Envia o arquivo
+            try:
+                with open(filepath, "rb") as f:
+                    if to_mp3:
+                        await query.message.reply_audio(f, title="Seu áudio 🎵")
+                    else:
+                        await query.message.reply_video(f, caption="✅ Seu vídeo está aqui!")
+            except Exception as e:
+                await query.message.reply_text(f"❌ Erro ao enviar arquivo: {e}")
 
-    # Remove arquivo temporário
-    try:
-        os.remove(filepath)
-    except:
-        pass
+            # Remove arquivo temporário
+            try:
+                os.remove(filepath)
+            except:
+                pass
 
-    # Incrementa limite diário para não-premium
-    if not is_premium(uid):
-        novo = incrementar_download_youtube(uid)
-        await update.message.reply_text(f"📊 YouTube: {novo}/{YT_FREE_LIMIT}")
+            # Incrementa limite diário para não-premium
+            if not is_premium(uid):
+                novo = incrementar_download_youtube(uid)
+                await query.message.reply_text(f"📊 YouTube: {novo}/{YT_FREE_LIMIT}")
 
-    return
+            return
 
     # -------- PLANOS / SUPORTE / ADMIN BUTTONS ----------
     if data == "planos":
@@ -784,6 +784,7 @@ async def main():
 if __name__ == "__main__":
     nest_asyncio.apply()
     asyncio.run(main())
+
 
 
 
