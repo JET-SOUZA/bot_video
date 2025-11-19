@@ -67,13 +67,14 @@ def download_youtube_file(url: str, quality: str = "480", to_mp3: bool = False, 
 
     else:
         # converte vídeo para MP4 corretamente
-       ydl_opts["postprocessors"] = [
+      ydl_opts["postprocessors"] = [
     {
         "key": "FFmpegVideoConvertor",
-        "preferredformat": "mp4"
+        "preferedformat": "mp4"   # <- correto (com 1 'r')
     },
     {"key": "FFmpegMetadata"}
 ]
+
 
     # Executa download
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
