@@ -647,14 +647,16 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return await query.answer("⚠️ Limite diário do YouTube atingido (3 downloads).", show_alert=True)
 
         # Ack with waiting notice
-        await query.edit_message_text("⏳ Iniciando download... Por favor aguarde (isso pode levar alguns minutos).")
+       msg = await update.message.reply_text("⏳ Iniciando download... Por favor aguarde...")
 
-        # Do the download in executor
-        to_mp3 = quality == "mp3"
-        # map quality names '1440' => '1440' etc.
-        selected_quality = quality
-
-        loop = asyncio.get_running_loop()
+try:
+    filepath = await asyncio.to_thread(
+        download_youtube_file,
+        url,
+        selected_quality,
+        to_mp3,
+        cookiefile_path
+    )
 
         # determine cookiefile path (if exists)
         cookiefile_path = str(COOKIES_YOUTUBE) if COOKIES_YOUTUBE.exists() else None
@@ -776,4 +778,5 @@ async def main():
 if __name__ == "__main__":
     nest_asyncio.apply()
     asyncio.run(main())
+
 
