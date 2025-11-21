@@ -13,11 +13,11 @@ async def main():
     # COMANDOS
     # -----------------------------------------------------
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("planos", planos))   # <--- CORRIGIDO!
     app.add_handler(CommandHandler("addpremium", addpremium))
     app.add_handler(CommandHandler("delpremium", delpremium))
     app.add_handler(CommandHandler("verpremium", verpremium))
     app.add_handler(CommandHandler("meuid", meuid))
+    app.add_handler(CommandHandler("planos", planos))   # <--- CORRIGIDO
 
     # -----------------------------------------------------
     # Botão "Planos" no teclado (reply keyboard)
@@ -30,11 +30,6 @@ async def main():
     )
 
     # -----------------------------------------------------
-    # CALLBACKS (INLINE BUTTONS)
-    # -----------------------------------------------------
-    app.add_handler(CallbackQueryHandler(callbacks_handler))
-
-    # -----------------------------------------------------
     # MENSAGENS DE TEXTO PARA DOWNLOAD
     # -----------------------------------------------------
     app.add_handler(
@@ -45,7 +40,12 @@ async def main():
     )
 
     # -----------------------------------------------------
-    # KEEPALIVE AUTOMÁTICO PARA RENDER
+    # CALLBACKS (Inline Buttons)
+    # -----------------------------------------------------
+    app.add_handler(CallbackQueryHandler(callbacks_handler))
+
+    # -----------------------------------------------------
+    # KEEPALIVE AUTOMÁTICO
     # -----------------------------------------------------
     asyncio.create_task(keepalive_task())
 
@@ -68,9 +68,12 @@ async def main():
         webhook_url=f"{url}/{TOKEN}",
     )
 
+
 # ---------------------------------------------------------
 # RUN
 # ---------------------------------------------------------
 if __name__ == "__main__":
+    import nest_asyncio  # <--- IMPORTAÇÃO CORRETA
     nest_asyncio.apply()
     asyncio.run(main())
+
