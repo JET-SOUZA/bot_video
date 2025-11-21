@@ -711,31 +711,59 @@ async def keepalive_task():
 # MAIN
 # ---------------------------------------------------------
 async def main():
+    # Carregamentos iniciais
     verificar_pagamentos_asaas()
     load_youtube_cookies_from_env()
 
+    # Inicializa aplicação
     app = Application.builder().token(TOKEN).build()
 
-    # Comandos
+    # -----------------------------------------------------
+    # COMANDOS
+    # -----------------------------------------------------
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("addpremium", addpremium))
     app.add_handler(CommandHandler("delpremium", delpremium))
     app.add_handler(CommandHandler("verpremium", verpremium))
     app.add_handler(CommandHandler("meuid", meuid))
 
-    # Botão "Planos" do menu (reply keyboard)
-    app.add_handler(MessageHandler(filters.Regex(r'^(Planos|💎 Planos)$'), planos))
+    # -----------------------------------------------------
+    # Botão "Planos" no teclado (reply keyboard)
+    # -----------------------------------------------------
+    app.add_handler(
+        MessageHandler(
+            filters.Regex(r'^(Planos|💎 Planos)$'),
+            planos
+        )
+    )
 
-    # Mensagens de links para download
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
+    # -----------------------------------------------------
+    # MENSAGENS DE TEXTO COM LINKS PARA DOWNLOAD
+    # (somente texto, excluindo comandos)
+    # -----------------------------------------------------
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            baixar_video
+        )
+    )
 
-    # CallbackQuery handler (YouTube + Menu + Admin)
+    # -----------------------------------------------------
+    # CALLBACKS (Inline Buttons)
+    # - YouTube
+    - Menu
+    - Admin
+    # -----------------------------------------------------
     app.add_handler(CallbackQueryHandler(callbacks_handler))
 
-    # Start keepalive task
+    # -----------------------------------------------------
+    # KEEPALIVE AUTOMÁTICO PARA RENDER
+    # -----------------------------------------------------
     asyncio.create_task(keepalive_task())
 
-    # Rodar no Render (webhook) ou local (polling)
+    # -----------------------------------------------------
+    # EXECUÇÃO: WEBHOOK (Render) ou POLLING (local)
+    # -----------------------------------------------------
     port = PORT
     url = os.environ.get("RENDER_EXTERNAL_URL")
 
@@ -759,3 +787,5 @@ async def main():
 if __name__ == "__main__":
     nest_asyncio.apply()
     asyncio.run(main())
+
+
