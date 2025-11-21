@@ -723,6 +723,9 @@ async def main():
     app.add_handler(CommandHandler("verpremium", verpremium))
     app.add_handler(CommandHandler("meuid", meuid))
 
+    # Botão "Planos" do menu (reply keyboard)
+app.add_handler(MessageHandler(filters.Regex(r'^(Planos|💎 Planos)$'), planos))
+
     # Mensagens de links para download
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
 
@@ -754,6 +757,7 @@ async def main():
 if __name__ == "__main__":
     nest_asyncio.apply()
     asyncio.run(main())
+
 
 
 
