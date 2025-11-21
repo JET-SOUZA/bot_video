@@ -724,7 +724,12 @@ async def main():
     app.add_handler(CommandHandler("meuid", meuid))
 
     # Botão "Planos" do menu (reply keyboard)
-app.add_handler(MessageHandler(filters.Regex(r'^(Planos|💎 Planos)$'), planos))
+    app.add_handler(MessageHandler(filters.Regex(r'^(Planos|💎 Planos)$'), planos))
+
+    # Último handler geral para baixar vídeos
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
+
+    await app.run_polling()
 
     # Mensagens de links para download
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
@@ -757,6 +762,7 @@ app.add_handler(MessageHandler(filters.Regex(r'^(Planos|💎 Planos)$'), planos)
 if __name__ == "__main__":
     nest_asyncio.apply()
     asyncio.run(main())
+
 
 
 
