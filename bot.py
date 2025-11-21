@@ -602,18 +602,21 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------------------------------------------------------
 async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
     data = query.data
     uid = query.from_user.id
 
     # PLANOS / SUPORTE / ADMIN BUTTONS
     if data == "planos":
+        # a função planos já chama query.answer()
         return await planos(update, context)
     if data == "duvida":
+        # a função duvida já chama query.answer()
         return await duvida(update, context)
     if data == "addpremium":
+        await query.answer()
         return await query.message.reply_text("Use: /addpremium <user_id>")
     if data == "delpremium":
+        await query.answer()
         return await query.message.reply_text("Use: /delpremium <user_id>")
 
     # YOUTUBE FLOW
@@ -623,6 +626,9 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await query.answer("Informação: escolha a qualidade para iniciar o download.", show_alert=False)
 
     if data.startswith("yt_start:"):
+        # para essas ações mais longas, responda imediatamente (sem alert) para tirar o "loading"
+        await query.answer()
+
         parts = data.split(":")
         if len(parts) != 3:
             return await query.answer("Erro interno (callback inválido).", show_alert=True)
@@ -748,5 +754,6 @@ async def main():
 if __name__ == "__main__":
     nest_asyncio.apply()
     asyncio.run(main())
+
 
 
