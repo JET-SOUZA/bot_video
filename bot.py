@@ -726,23 +726,19 @@ async def main():
     # Botão "Planos" do menu (reply keyboard)
     app.add_handler(MessageHandler(filters.Regex(r'^(Planos|💎 Planos)$'), planos))
 
-    # Último handler geral para baixar vídeos
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
-
-    await app.run_polling()
-
     # Mensagens de links para download
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, baixar_video))
 
     # CallbackQuery handler (YouTube + Menu + Admin)
     app.add_handler(CallbackQueryHandler(callbacks_handler))
 
-    # Start keepalive
+    # Start keepalive task
     asyncio.create_task(keepalive_task())
 
     # Rodar no Render (webhook) ou local (polling)
     port = PORT
     url = os.environ.get("RENDER_EXTERNAL_URL")
+
     if not url:
         print("Rodando LOCAL (Polling)...")
         await app.run_polling()
@@ -756,14 +752,10 @@ async def main():
         webhook_url=f"{url}/{TOKEN}",
     )
 
+
 # ---------------------------------------------------------
 # RUN
 # ---------------------------------------------------------
 if __name__ == "__main__":
     nest_asyncio.apply()
     asyncio.run(main())
-
-
-
-
-
