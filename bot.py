@@ -554,18 +554,25 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         output = str(DOWNLOADS_DIR / f"%(id)s-{timestamp}.%(ext)s")
-        ydl_opts = {
-            "outtmpl": output,
-            "format": "bestvideo+bestaudio/best",
-            "merge_output_format": "mp4",
-            "noplaylist": True,
-            "postprocessors": [
-                {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"},
-                {"key": "FFmpegMetadata"},
-                {"key": "FFmpegVideoRemuxer", "preferedformat": "mp4"},
-            ],
-            "postprocessor_args": ["-movflags", "faststart"],
-        }
+       ydl_opts = {
+    "outtmpl": output,
+
+    # Melhor qualidade sem esticar (vídeo + áudio separados)
+    "format": "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best",
+
+    "noplaylist": True,
+
+    # Mantém metadata mas NÃO reconverte o vídeo (evita distorção)
+    "postprocessors": [
+        {"key": "FFmpegMetadata"},
+    ],
+
+    # Apenas junta vídeo + áudio em mp4 sem alterar aspecto
+    "merge_output_format": "mp4",
+
+    # Melhor compatibilidade para Telegram, WhatsApp e players
+    "postprocessor_args": ["-movflags", "faststart"],
+}
         if COOKIES_TIKTOK.exists():
             ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
         if "instagram" in url and COOKIES_INSTAGRAM.exists():
@@ -779,3 +786,4 @@ if __name__ == "__main__":
     import nest_asyncio  # <--- IMPORTAÇÃO CORRETA
     nest_asyncio.apply()
     asyncio.run(main())
+
