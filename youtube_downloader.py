@@ -1,5 +1,5 @@
 import os
-import yt_dlp
+import subprocess
 from pathlib import Path
 from datetime import datetime
 
@@ -8,16 +8,11 @@ DOWNLOAD_DIR = SCRIPT_DIR / "downloads" / "youtube"
 DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
-class SilentLogger:
-    def debug(self, msg): pass
-    def warning(self, msg): pass
-    def error(self, msg): print(msg)
-
-
-def get_format_for_quality(quality: str):
-    """Retorna a expressão correta do yt-dlp para a qualidade escolhida."""
-
-    if quality == "mp3":
+# --------------------------------------------
+# FORMATS
+# --------------------------------------------
+def get_format_for_quality(quality: str, to_mp3: bool):
+    if to_mp3:
         return "bestaudio/best"
 
     table = {
@@ -28,73 +23,72 @@ def get_format_for_quality(quality: str):
         "1440": "bestvideo[height<=1440]+bestaudio/best",
         "2160": "bestvideo[height<=2160]+bestaudio/best",
     }
-
     return table.get(str(quality), "bestvideo+bestaudio/best")
 
 
-def download_youtube_file(url: str, quality: str = "480", to_mp3: bool = False, cookiefile: str = None):
+# --------------------------------------------
+# SUBPROCESS YT-DLP (NÃO TRAVA RENDER FREE)
+# --------------------------------------------
+def download_youtube_file(url: str, quality="480", to_mp3=False, cookiefile=None):
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    safe_title = "%(title)s"
-    outtmpl = str(DOWNLOAD_DIR / f"{safe_title}-{timestamp}.%(ext)s")
+    basename = f"video-{timestamp}"
 
-    ydl_opts = {
-        "outtmpl": outtmpl,
-        "logger": SilentLogger(),
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
+    # MP3 → exige outro template
+    if to_mp3:
+        outtmpl = str(DOWNLOAD_DIR / f"{basename}.mp3")
+    else:
+        outtmpl = str(DOWNLOAD_DIR / f"{basename}.mp4")
 
-        # formato correto baseado na qualidade
-        "format": get_format_for_quality("mp3" if to_mp3 else quality),
-
-        # saída final preferida como mp4
-        "merge_output_format": "mp4",
-
-        # melhora compatibilidade
-        "postprocessor_args": ["-movflags", "faststart"],
-
-        # estabilidade do download
-        "hls_use_mpegts": True,
-        "hls_prefer_native": False,
-        "fragment_retries": 20,
-        "retries": 20,
-    }
+    # monta comando yt-dlp
+    cmd = [
+        "yt-dlp",
+        "-o", outtmpl,
+        "-f", get_format_for_quality(quality, to_mp3),
+        "--no-warnings",
+        "--restrict-filenames",
+        "--no-playlist",
+        "--retries", "20",
+        "--fragment-retries", "20",
+        "--hls-use-mpegts",
+        "--merge-output-format", "mp4",
+        "--postprocessor-args", "-movflags faststart",
+    ]
 
     if cookiefile:
-        ydl_opts["cookiefile"] = cookiefile
+        cmd += ["--cookies", cookiefile]
 
-    # --- modo MP3 ---
-    if to_mp3 or quality == "mp3":
-        ydl_opts.update({
-            "format": "bestaudio/best",
-            "postprocessors": [
-                {
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": "192",
-                },
-                {"key": "FFmpegMetadata"},
-            ]
-        })
-    else:
-        # somente metadados; conversão para mp4 é automática via merge_output_format
-        ydl_opts["postprocessors"] = [
-            {"key": "FFmpegMetadata"},
+    if to_mp3:
+        cmd += [
+            "--extract-audio",
+            "--audio-format", "mp3",
+            "--audio-quality", "192K",
         ]
 
-    # --- EXECUTA O DOWNLOAD ---
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
+    cmd.append(url)
 
-        if "entries" in info and info["entries"]:
-            info = info["entries"][0]
+    # ---- RUN (BLOQUEIO ISOLADO → NÃO TRAVA WEBHOOK) ----
+    process = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
 
-        filepath = ydl.prepare_filename(info)
+    if process.returncode != 0:
+        raise Exception(f"yt-dlp erro: {process.stderr[-500:]}")
 
-        # caso tenha virado mp3
-        if (to_mp3 or quality == "mp3") and not filepath.lower().endswith(".mp3"):
-            mp3_path = os.path.splitext(filepath)[0] + ".mp3"
-            if os.path.exists(mp3_path):
-                filepath = mp3_path
+    # identifica arquivo final
+    if to_mp3:
+        filepath = outtmpl
+    else:
+        filepath = outtmpl.replace(".mp4", ".mp4")
 
-        return filepath
+    if not os.path.exists(filepath):
+        # fallback: tenta achar arquivo gerado no diretório
+        files = list(DOWNLOAD_DIR.glob(f"{basename}*"))
+        if files:
+            filepath = str(files[0])
+        else:
+            raise FileNotFoundError("Arquivo final não encontrado após download.")
+
+    return filepath
