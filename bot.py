@@ -520,9 +520,12 @@ def _build_yt_keyboard(token: str, is_premium_user: bool, used: int):
 async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
     uid = update.message.from_user.id
+
     if not url.startswith("http"):
         return await update.message.reply_text("❌ Envie um link válido.")
+
     verificar_pagamentos_asaas()
+
     if not is_premium(uid):
         usos = verificar_limite(uid)
         if usos >= LIMITE_DIARIO:
@@ -534,12 +537,14 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not video_url:
             return await update.message.reply_text("❌ Não foi possível extrair vídeo da Shopee.")
         url = video_url
+
     elif any(x in url for x in ["instagram.com", "instagr.am", "ig.me"]):
         await update.message.reply_text("🔄 Processando link do Instagram...")
         video_url = extrair_video_instagram(url)
         if not video_url:
             return await update.message.reply_text("❌ Não foi possível extrair vídeo do Instagram (pode ser privado).")
         url = video_url
+
     elif any(x in url for x in ["youtube.com", "youtu.be"]):
         _cleanup_pending()
         token = _make_yt_token()
@@ -552,7 +557,7 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("⏳ Baixando...")
     try:
-               timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         output = str(DOWNLOADS_DIR / f"%(id)s-{timestamp}.%(ext)s")
 
         ydl_opts = {
@@ -574,8 +579,10 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Melhor compatibilidade para Telegram, WhatsApp e players
             "postprocessor_args": ["-movflags", "faststart"],
         }
+
         if COOKIES_TIKTOK.exists():
             ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
+
         if "instagram" in url and COOKIES_INSTAGRAM.exists():
             ydl_opts["cookiefile"] = str(COOKIES_INSTAGRAM)
 
@@ -787,5 +794,6 @@ if __name__ == "__main__":
     import nest_asyncio  # <--- IMPORTAÇÃO CORRETA
     nest_asyncio.apply()
     asyncio.run(main())
+
 
 
