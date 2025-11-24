@@ -778,9 +778,15 @@ async def main():
 # RUN
 # ---------------------------------------------------------
 if __name__ == "__main__":
-    import nest_asyncio  # <--- IMPORTAÇÃO CORRETA
-    nest_asyncio.apply()
-    asyncio.run(main())
+    import asyncio
+    try:
+        asyncio.run(main())
+    except RuntimeError:
+        # Render já tem um event loop rodando → usar loop existente
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(main())
+
+
 
 
 
