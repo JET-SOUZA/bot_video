@@ -779,12 +779,20 @@ async def main():
 # ---------------------------------------------------------
 if __name__ == "__main__":
     import asyncio
+    import nest_asyncio
+
+    # Render já usa um loop rodando internamente
+    nest_asyncio.apply()
+
     try:
-        asyncio.run(main())
+        asyncio.get_event_loop().run_until_complete(main())
     except RuntimeError:
-        # Render já tem um event loop rodando → usar loop existente
+        # Se o loop já estiver rodando, apenas pega o existente
         loop = asyncio.get_event_loop()
-        loop.run_until_complete(main())
+        loop.create_task(main())
+        loop.run_forever()
+
+
 
 
 
