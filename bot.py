@@ -555,54 +555,41 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🎯 Escolha a qualidade do YouTube:", reply_markup=kb)
         return
 
-    await update.message.reply_text("⏳ Baixando...")
+        await update.message.reply_text("⏳ Baixando...")
+
     try:
-        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        output = str(DOWNLOADS_DIR / f"%(id)s-{timestamp}.%(ext)s")
-
-        ydl_opts = {
-            "outtmpl": output,
-
-            # Melhor qualidade sem esticar (vídeo + áudio separados)
-            "format": "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best",
-
-            "noplaylist": True,
-
-            # Mantém metadata mas NÃO reconverte o vídeo (evita distorção)
-            "postprocessors": [
-                {"key": "FFmpegMetadata"},
-            ],
-
-            # Apenas junta vídeo + áudio em mp4 sem alterar aspecto
-            "merge_output_format": "mp4",
-
-            # Melhor compatibilidade para Telegram, WhatsApp e players
-            "postprocessor_args": ["-movflags", "faststart"],
-        }
-
-        if COOKIES_TIKTOK.exists():
-            ydl_opts["cookiefile"] = str(COOKIES_TIKTOK)
-
-        if "instagram" in url and COOKIES_INSTAGRAM.exists():
-            ydl_opts["cookiefile"] = str(COOKIES_INSTAGRAM)
-
-        def run(url_local):
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url_local, download=True)
-                return ydl.prepare_filename(info)
-
         loop = asyncio.get_running_loop()
-        file_path = await loop.run_in_executor(None, lambda: run(url))
 
-        if os.path.exists(file_path):
-            with open(file_path, "rb") as f:
-                await update.message.reply_video(f, caption="✅ Seu vídeo está aqui!")
+        def _download_blocking():
             try:
-                os.remove(file_path)
-            except:
-                pass
-        else:
-            await update.message.reply_video(file_path, caption="✅ Seu vídeo está aqui!")
+                path = download_youtube_file(
+                    url,
+                    quality="1080",   # qualidade máxima para downloads comuns
+                    to_mp3=False,
+                    cookiefile=str(COOKIES_YOUTUBE) if COOKIES_YOUTUBE.exists() else None
+                )
+                return {"ok": True, "path": path}
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
+
+        result = await loop.run_in_executor(None, _download_blocking)
+
+        if not result["ok"]:
+            return await update.message.reply_text(f"❌ Erro ao baixar: {result['error']}")
+
+        filepath = result["path"]
+        if not filepath or not os.path.exists(filepath):
+            return await update.message.reply_text("❌ O download falhou (arquivo não encontrado).")
+
+        # Envia o vídeo
+        with open(filepath, "rb") as f:
+            await update.message.reply_video(f, caption="✅ Seu vídeo está aqui!")
+
+        # Apaga o arquivo
+        try:
+            os.remove(filepath)
+        except:
+            pass
 
         if not is_premium(uid):
             novo = incrementar_download(uid)
@@ -794,6 +781,7 @@ if __name__ == "__main__":
     import nest_asyncio  # <--- IMPORTAÇÃO CORRETA
     nest_asyncio.apply()
     asyncio.run(main())
+
 
 
 
