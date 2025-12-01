@@ -29,8 +29,8 @@ from telegram.ext import (
 import yt_dlp
 import nest_asyncio
 
-# YT: import module
-from youtube_downloader import download_youtube_file
+# YT: import module (função existente no arquivo)
+from youtube_downloader import baixar_video_youtube
 
 # ---------------------------------------------------------
 # CONFIGURAÇÕES
@@ -618,56 +618,66 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "delpremium":
         return await query.message.reply_text("Use: /delpremium <user_id>")
 
-    # YOUTUBE FLOW
+    # ---------------------------------------------------------
+    # YOUTUBE FLOW (CORRIGIDO)
+    # ---------------------------------------------------------
     if data == "yt_locked":
-        return await query.answer("⚠️ Esta qualidade está disponível apenas para usuários Premium.", show_alert=True)
+        return await query.answer(
+            "⚠️ Esta qualidade está disponível apenas para usuários Premium.",
+            show_alert=True
+        )
+
     if data == "yt_info":
-        return await query.answer("Informação: escolha a qualidade para iniciar o download.", show_alert=False)
+        return await query.answer(
+            "Informação: escolha a qualidade para iniciar o download.",
+            show_alert=False
+        )
 
     if data.startswith("yt_start:"):
         parts = data.split(":")
         if len(parts) != 3:
             return await query.answer("Erro interno (callback inválido).", show_alert=True)
+
         token = parts[1]
         quality = parts[2]
+
         pending = YT_PENDING.get(token)
         if not pending:
             return await query.answer("Sessão expirada. Envie o link novamente.", show_alert=True)
+
         if query.from_user.id != pending.get("uid"):
             return await query.answer("Esses botões não são para você.", show_alert=True)
 
         url = pending.get("url")
         to_mp3 = (quality == "mp3")
 
+        # Limite diário para Free
         if not is_premium(uid):
             used = verificar_limite_youtube(uid)
             if used >= YT_FREE_LIMIT:
-                return await query.answer("⚠️ Limite diário do YouTube atingido (3 downloads).", show_alert=True)
+                return await query.answer(
+                    f"⚠️ Limite diário do YouTube atingido ({YT_FREE_LIMIT}).",
+                    show_alert=True
+                )
 
         msg = await query.message.reply_text("⏳ Iniciando download... Por favor aguarde...")
-        cookiefile_path = str(COOKIES_YOUTUBE) if COOKIES_YOUTUBE.exists() else None
 
-        loop = asyncio.get_running_loop()
-
-        def _download_blocking():
-            try:
-                path = download_youtube_file(
-                    url, quality=quality, to_mp3=to_mp3, cookiefile=cookiefile_path
-                )
-                return {"ok": True, "path": path}
-            except Exception as e:
-                return {"ok": False, "error": str(e)}
-
-        result = await loop.run_in_executor(None, _download_blocking)
-        if not result["ok"]:
-            await msg.edit_text(f"❌ Erro ao baixar: {result.get('error', 'erro desconhecido')}")
+        # 🔥 Agora usando a função async correta
+        try:
+            filepath = await baixar_video_youtube(
+                url,
+                output_dir=str(DOWNLOAD_DIR),
+                chat_id=uid
+            )
+        except Exception as e:
+            await msg.edit_text(f"❌ Erro ao baixar: {e}")
             return
 
-        filepath = result["path"]
         if not filepath or not os.path.exists(filepath):
             await msg.edit_text("❌ O download falhou (arquivo não encontrado).")
             return
 
+        # Envia para o Telegram
         try:
             with open(filepath, "rb") as f:
                 if to_mp3:
@@ -677,15 +687,18 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             await query.message.reply_text(f"❌ Erro ao enviar arquivo: {e}")
 
+        # Apagar arquivo depois de enviado
         try:
             os.remove(filepath)
         except:
             pass
 
+        # Incrementa contador se for Free
         if not is_premium(uid):
             novo = incrementar_download_youtube(uid)
             await query.message.reply_text(f"📊 YouTube: {novo}/{YT_FREE_LIMIT}")
 
+        return
 
 # ---------------------------------------------------------
 # KEEPALIVE (Render Free / Ping)
@@ -795,10 +808,6 @@ if __name__ == "__main__":
         loop = asyncio.get_event_loop()
         loop.create_task(main())
         loop.run_forever()
-
-
-
-
 
 
 
