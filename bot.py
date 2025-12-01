@@ -15,6 +15,7 @@ from urllib.parse import unquote
 import re
 import secrets
 import time
+import typing
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import (
@@ -30,7 +31,18 @@ import yt_dlp
 import nest_asyncio
 
 # YT: import module (função existente no arquivo)
-from youtube_downloader import baixar_video_youtube
+# Faz import resiliente: tenta importar ambas as funções, mas aceita quando só existe a async
+try:
+    from youtube_downloader import baixar_video_youtube, download_youtube_file
+except Exception:
+    # tenta importar só a versão async (nome usado no seu último draft)
+    try:
+        from youtube_downloader import baixar_video_youtube
+        download_youtube_file = None
+    except Exception:
+        # se nada existir, deixar placeholders que vão levantar erro claro quando usados
+        baixar_video_youtube = None
+        download_youtube_file = None
 
 # ---------------------------------------------------------
 # CONFIGURAÇÕES
@@ -53,6 +65,10 @@ PORT = int(os.environ.get("PORT", 10000))
 SCRIPT_DIR = Path(__file__).parent.resolve()
 DOWNLOADS_DIR = SCRIPT_DIR / "downloads"
 DOWNLOADS_DIR.mkdir(exist_ok=True)
+
+# Pasta dedicada para YouTube (corrige NameError)
+DOWNLOAD_DIR = DOWNLOADS_DIR / "youtube"
+DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 ARQUIVO_CONTADOR = SCRIPT_DIR / "downloads.json"
 ARQUIVO_PREMIUM = SCRIPT_DIR / "premium.json"
@@ -561,16 +577,38 @@ async def baixar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         loop = asyncio.get_running_loop()
 
         def _download_blocking():
-            try:
-                path = download_youtube_file(
-                    url,
-                    quality="1080",   # qualidade máxima para downloads comuns
-                    to_mp3=False,
-                    cookiefile=str(COOKIES_YOUTUBE) if COOKIES_YOUTUBE.exists() else None
-                )
-                return {"ok": True, "path": path}
-            except Exception as e:
-                return {"ok": False, "error": str(e)}
+            """
+            Compatibilidade:
+            - Se existir download_youtube_file (funcão blocking), usa ela.
+            - Caso contrário, usa a função async baixar_video_youtube executando em um loop separado (run).
+            Isso mantém compatibilidade com seus dois formatos de módulo.
+            """
+            if download_youtube_file:
+                try:
+                    path = download_youtube_file(
+                        url,
+                        quality="1080",   # qualidade máxima para downloads comuns
+                        to_mp3=False,
+                        cookiefile=str(COOKIES_YOUTUBE) if COOKIES_YOUTUBE.exists() else None
+                    )
+                    return {"ok": True, "path": path}
+                except Exception as e:
+                    return {"ok": False, "error": str(e)}
+            else:
+                # tenta usar baixar_video_youtube (async) de forma segura dentro de thread
+                if not baixar_video_youtube:
+                    return {"ok": False, "error": "Nenhuma função de download YouTube encontrada (download_youtube_file ou baixar_video_youtube)."}
+                try:
+                    # rodar a coroutine em um novo loop (ok porque estamos em thread)
+                    import asyncio as _asyncio
+                    path = _asyncio.run(baixar_video_youtube(
+                        url,
+                        output_dir=str(DOWNLOAD_DIR),
+                        chat_id=uid
+                    ))
+                    return {"ok": True, "path": path}
+                except Exception as e:
+                    return {"ok": False, "error": str(e)}
 
         result = await loop.run_in_executor(None, _download_blocking)
 
@@ -662,13 +700,26 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         msg = await query.message.reply_text("⏳ Iniciando download... Por favor aguarde...")
 
-        # 🔥 Agora usando a função async correta
+        # 🔥 Agora usando a função async correta (baixar_video_youtube) se disponível
         try:
-            filepath = await baixar_video_youtube(
-                url,
-                output_dir=str(DOWNLOAD_DIR),
-                chat_id=uid
-            )
+            if baixar_video_youtube:
+                filepath = await baixar_video_youtube(
+                    url,
+                    output_dir=str(DOWNLOAD_DIR),
+                    chat_id=uid
+                )
+            else:
+                # fallback para download_youtube_file blocking (se existir)
+                if not download_youtube_file:
+                    raise RuntimeError("Nenhuma função de download YouTube disponível.")
+                # executar dentro de executor para não bloquear o loop
+                loop = asyncio.get_running_loop()
+                def _blk():
+                    return download_youtube_file(
+                        url, quality=quality, to_mp3=to_mp3,
+                        cookiefile=str(COOKIES_YOUTUBE) if COOKIES_YOUTUBE.exists() else None
+                    )
+                filepath = await loop.run_in_executor(None, _blk)
         except Exception as e:
             await msg.edit_text(f"❌ Erro ao baixar: {e}")
             return
@@ -808,8 +859,3 @@ if __name__ == "__main__":
         loop = asyncio.get_event_loop()
         loop.create_task(main())
         loop.run_forever()
-
-
-
-
-
