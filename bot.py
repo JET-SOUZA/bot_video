@@ -707,22 +707,26 @@ async def keepalive_task():
 # MAIN
 # ---------------------------------------------------------
 async def main():
-    # Carregamentos iniciais
     verificar_pagamentos_asaas()
     load_youtube_cookies_from_env()
 
-    # Inicializa aplicação
     app = Application.builder().token(TOKEN).build()
 
-    # -----------------------------------------------------
-    # COMANDOS
-    # -----------------------------------------------------
+    # 🔧 REGISTRA MENUS
+    await app.bot.set_my_commands([
+        BotCommand("start", "Iniciar o bot"),
+        BotCommand("meuid", "Mostrar seu ID"),
+        BotCommand("addpremium", "Adicionar usuário premium (admin)"),
+        BotCommand("delpremium", "Remover usuário premium (admin)"),
+        BotCommand("verpremium", "Listar usuários premium (admin)"),
+    ])
+
+    # Comandos
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("addpremium", addpremium))
     app.add_handler(CommandHandler("delpremium", delpremium))
     app.add_handler(CommandHandler("verpremium", verpremium))
     app.add_handler(CommandHandler("meuid", meuid))
-    app.add_handler(CommandHandler("planos", planos))   # <--- CORRIGIDO
 
     # -----------------------------------------------------
     # Botão "Planos" no teclado (reply keyboard)
@@ -791,6 +795,7 @@ if __name__ == "__main__":
         loop = asyncio.get_event_loop()
         loop.create_task(main())
         loop.run_forever()
+
 
 
 
