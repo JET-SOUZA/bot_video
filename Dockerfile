@@ -42,7 +42,8 @@ RUN mkdir -p /app/downloads && chmod -R a+rw /app/downloads
 
 # A V2 tenta a fonte original da Shopee primeiro. Quando ela não estiver
 # disponível, usa a melhor mídia reproduzível encontrada em vez de bloquear o
-# download. O diagnóstico por source-map lê apenas assets públicos do frontend.
-# No staging, as linhas Shopee sanitizadas são enviadas também em um TXT pelo
-# próprio Telegram para eliminar a necessidade de screenshots do Render.
-CMD ["sh", "-c", "node /root/bgutil-ytdlp-pot-provider/server/build/main.js 2>&1 & exec python -c \"import shopee_diag_capture, sitecustomize, shopee_structured_patch, shopee_sourcemap_probe, shopee_diag_telegram_patch, runpy; runpy.run_path('/app/run_v2_fallback.py', run_name='__main__')\""]
+# download. O diagnóstico lê apenas assets públicos do frontend. A camada
+# frontend_api descobre a mesma função HP usada pela página e só faz uma
+# requisição de leitura quando rota e payload podem ser reconstruídos sem
+# adivinhação. No staging, as linhas Shopee sanitizadas também vão em TXT.
+CMD ["sh", "-c", "node /root/bgutil-ytdlp-pot-provider/server/build/main.js 2>&1 & exec python -c \"import shopee_diag_capture, sitecustomize, shopee_structured_patch, shopee_sourcemap_probe, shopee_frontend_api_patch, shopee_diag_telegram_patch, runpy; runpy.run_path('/app/run_v2_fallback.py', run_name='__main__')\""]
