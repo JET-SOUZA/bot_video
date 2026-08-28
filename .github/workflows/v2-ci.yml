@@ -34,10 +34,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build Docker image
         run: docker build -t jetbot-v2-ci .
-      - name: Check FFmpeg and Node
+      - name: Check FFmpeg, Node and Deno
         run: |
           docker run --rm --entrypoint ffmpeg jetbot-v2-ci -version
           docker run --rm --entrypoint node jetbot-v2-ci --version
+          docker run --rm --entrypoint deno jetbot-v2-ci --version
       - name: Check YouTube PO token provider starts
         run: >-
           docker run --rm --entrypoint sh jetbot-v2-ci -c
