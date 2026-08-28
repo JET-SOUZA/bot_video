@@ -18,19 +18,16 @@ FROM python:3.11-slim
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
-    PORT=10000 \
-    DENO_VERSION=2.9.5
+    PORT=10000
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ffmpeg ca-certificates curl unzip && \
-    curl -fsSL "https://github.com/denoland/deno/releases/download/v${DENO_VERSION}/deno-x86_64-unknown-linux-gnu.zip" -o /tmp/deno.zip && \
-    unzip /tmp/deno.zip -d /usr/local/bin && \
-    chmod +x /usr/local/bin/deno && \
-    rm -f /tmp/deno.zip && \
+    apt-get install -y --no-install-recommends ffmpeg ca-certificates curl && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Node 22 atende o runtime EJS atual do yt-dlp; Deno fica disponível como
-# runtime recomendado para os desafios JavaScript do YouTube.
+# Node 22 atende o runtime JavaScript atual do yt-dlp e também executa o
+# servidor HTTP do BgUtils. Deno foi removido desta imagem porque, quando o
+# servidor HTTP falhava, o provider podia cair no script Deno e estourar o
+# timeout fixo de 15 s antes mesmo do download começar.
 COPY --from=pot-builder /usr/local/bin/node /usr/local/bin/node
 COPY --from=pot-builder /root/bgutil-ytdlp-pot-provider /root/bgutil-ytdlp-pot-provider
 
@@ -40,10 +37,8 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY . /app
 RUN mkdir -p /app/downloads && chmod -R a+rw /app/downloads
 
-# A V2 tenta a fonte original da Shopee primeiro. Quando ela não estiver
-# disponível, usa a melhor mídia reproduzível encontrada em vez de bloquear o
-# download. O diagnóstico lê apenas assets públicos do frontend. A camada
-# frontend_api descobre a função HP; a camada timeline reconhece somente a
-# assinatura pública GET /api/v2/timeline/single?post_id=... mostrada no bundle.
-# No staging, as linhas Shopee sanitizadas também vão em TXT.
-CMD ["sh", "-c", "node /root/bgutil-ytdlp-pot-provider/server/build/main.js 2>&1 & exec python -c \"import shopee_diag_capture, sitecustomize, shopee_structured_patch, shopee_sourcemap_probe, shopee_frontend_api_patch, shopee_timeline_patch, shopee_diag_telegram_patch, runpy; runpy.run_path('/app/run_v2_fallback.py', run_name='__main__')\""]
+# O BgUtils sobe primeiro e o bot só inicia depois que /ping responder. Isso
+# força o caminho HTTP (mais rápido/recomendado pelo projeto) a estar disponível
+# antes de qualquer tentativa de YouTube. A V2 também carrega a preservação de
+# mídia do X/Twitter e as camadas atuais de investigação da Shopee.
+CMD ["sh", "-c", "node /root/bgutil-ytdlp-pot-provider/server/build/main.js 2>&1 & POT_PID=$!; i=0; until curl -fsS http://127.0.0.1:4416/ping >/dev/null 2>&1; do i=$((i+1)); if [ $i -ge 100 ]; then echo '[JetBot YT] BgUtils HTTP server failed readiness check'; kill $POT_PID 2>/dev/null || true; exit 1; fi; sleep 0.2; done; echo '[JetBot YT] BgUtils HTTP server ready'; exec python -c \"import shopee_diag_capture, sitecustomize, media_fidelity_patch, shopee_structured_patch, shopee_sourcemap_probe, shopee_frontend_api_patch, shopee_timeline_patch, shopee_diag_telegram_patch, runpy; runpy.run_path('/app/run_v2_fallback.py', run_name='__main__')\""]
