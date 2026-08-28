@@ -2,8 +2,8 @@
 
 Política estrita para Shopee Video: nunca entrega como original uma URL
 proveniente de campo/rota marcada, nem uma URL sem evidência positiva de ser
-fonte limpa. Também inspeciona payloads Next.js da página compartilhada para
-tentar localizar a mídia master/original antes de desistir.
+fonte limpa. Também inspeciona payloads e bundles Next.js da página
+compartilhada para tentar localizar a mídia master/original antes de desistir.
 """
 
 import json
@@ -12,7 +12,7 @@ import re
 import shutil
 import tempfile
 from pathlib import Path
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urljoin, urlparse
 
 import requests
 import yt_dlp
@@ -48,8 +48,6 @@ GOOD_SHOPEE_HINTS = (
     "download",
 )
 
-# Campos genéricos como play/video_url não bastam para provar que a mídia é
-# limpa, porque a Shopee também usa esses nomes para variantes renderizadas.
 TRUSTED_SHOPEE_HINTS = GOOD_SHOPEE_HINTS
 
 
@@ -113,11 +111,70 @@ def _iter_next_payloads(html: str, share_id: str, headers: dict):
     return payloads
 
 
-def _external_clean_source(url: str):
-    """Usa somente um extrator configurado pelo dono do bot.
+def _extract_runtime_paths(js_text: str):
+    """Extrai rotas relacionadas a vídeo/post/share presentes nos bundles."""
+    found = set()
+    for match in re.finditer(r'["\']([^"\']{4,260})["\']', js_text or ""):
+        value = match.group(1).replace("\\/", "/")
+        low = value.lower()
+        if not any(token in low for token in ("video", "share", "post", "media")):
+            continue
+        if not any(token in low for token in ("/api/", "api/", "/video", "/post", "/share", "media")):
+            continue
+        if "_next/static" in low or "node_modules" in low:
+            continue
+        if len(value) > 240:
+            continue
+        found.add(value)
+    return sorted(found)
 
-    Se SHOPEE_EXTRACTOR_URL existir, espera JSON com videoUrl/video_url/url.
+
+def _inspect_shopee_runtime(html: str, page_url: str, headers: dict):
+    """Lê bundles públicos carregados pela página e registra rotas úteis.
+
+    Não chama rotas descobertas automaticamente; apenas registra strings de
+    endpoint para que possamos identificar a API usada pelo front sem vazar
+    URLs assinadas de mídia ou cookies.
     """
+    if not html:
+        return []
+    scripts = []
+    for match in re.finditer(r'<script[^>]+src=["\']([^"\']+\.js[^"\']*)["\']', html, re.I):
+        src = match.group(1).replace("&amp;", "&")
+        if "_next/static" not in src and "shareweb/static" not in src:
+            continue
+        scripts.append(urljoin(page_url, src))
+    scripts = list(dict.fromkeys(scripts))[:16]
+
+    endpoints = set()
+    for script_url in scripts:
+        try:
+            response = requests.get(script_url, timeout=15, headers=headers)
+            if not response.ok:
+                continue
+            text = response.text or ""
+            for item in _extract_runtime_paths(text):
+                endpoints.add(item)
+        except Exception as exc:
+            print(f"[JetBot Shopee] bundle fetch failed: {type(exc).__name__}: {exc}")
+
+    ranked = sorted(
+        endpoints,
+        key=lambda value: (
+            "original" not in value.lower() and "master" not in value.lower(),
+            "video" not in value.lower(),
+            len(value),
+        ),
+    )[:30]
+    print(f"[JetBot Shopee] runtime bundles={len(scripts)} endpoint_candidates={len(ranked)}")
+    for endpoint in ranked:
+        safe = endpoint.replace("\n", " ")[:240]
+        print(f"[JetBot Shopee] runtime_endpoint={safe}")
+    return ranked
+
+
+def _external_clean_source(url: str):
+    """Usa somente um extrator configurado pelo dono do bot."""
     endpoint = (os.environ.get("SHOPEE_EXTRACTOR_URL") or "").strip()
     if not endpoint:
         return None
@@ -128,8 +185,6 @@ def _external_clean_source(url: str):
         candidate = payload.get("videoUrl") or payload.get("video_url") or payload.get("url")
         if not candidate or not str(candidate).startswith("http"):
             return None
-        # Serviço externo explicitamente configurado é uma fonte confiável,
-        # mas ainda recusamos URLs que se anunciem como watermark.
         if _marked_candidate("external.original", str(candidate)):
             return None
         return str(candidate)
@@ -180,8 +235,6 @@ def strict_extract_shopee_original(url: str):
                     candidates.append((f"{label}.{path}", candidate))
 
     if html:
-        # Mantém o nome do campo para identificar watermarkVideoUrl e também
-        # campos master/original serializados no HTML.
         field_pattern = re.compile(
             r'"([^"\\]*(?:original|origin|source|master|raw|upload|download|play|video|watermark)[^"\\]*)"\s*:\s*"(https?:[^"\\]+)"',
             flags=re.IGNORECASE,
@@ -190,8 +243,6 @@ def strict_extract_shopee_original(url: str):
             raw = match.group(2).replace("\\u002F", "/").replace("\\/", "/")
             candidates.append((f"html.field.{match.group(1).lower()}", raw))
 
-        # URLs sem rótulo servem apenas para diagnóstico. Não serão aceitas
-        # como limpas sem um sinal positivo no próprio caminho/URL.
         for match in re.finditer(r"https?:\\?/\\?/[^\s\"'<>]+?(?:\.mp4|\.m3u8)[^\s\"'<>]*", html):
             raw = match.group(0).replace("\\/", "/")
             candidates.append(("html.unlabeled", raw))
@@ -205,8 +256,15 @@ def strict_extract_shopee_original(url: str):
         trusted = _trusted_clean_candidate(path, candidate)
         score = _clean_score(path, candidate)
         current = unique.get(candidate)
-        if current is None or score > current[0]:
+        if current is None:
             unique[candidate] = (score, marked, trusted, path)
+        else:
+            # Nunca deixa uma aparição sem rótulo apagar a origem watermark.
+            best_score = max(current[0], score)
+            any_marked = current[1] or marked
+            any_trusted = (current[2] or trusted) and not any_marked
+            best_path = path if score > current[0] else current[3]
+            unique[candidate] = (best_score, any_marked, any_trusted, best_path)
 
     ranked = sorted(
         ((url_value, *meta) for url_value, meta in unique.items()),
@@ -232,6 +290,10 @@ def strict_extract_shopee_original(url: str):
     if external:
         print("[JetBot Shopee] clean source selected from configured extractor")
         return external
+
+    # Última etapa de diagnóstico antes de falhar: descobrir as rotas reais
+    # embutidas nos bundles atuais da página Shopee Video.
+    _inspect_shopee_runtime(html, resolved, headers)
 
     print(
         f"[JetBot Shopee] CLEAN_SOURCE_NOT_FOUND share_id={share_id or 'unknown'} "
