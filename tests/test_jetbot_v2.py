@@ -124,20 +124,28 @@ class DownloadMockTests(unittest.TestCase):
             finally:
                 Path(path).unlink(missing_ok=True)
 
+    def test_shopee_watermark_button_is_scoped(self):
+        markup = bot._watermark_keyboard("tok", "shopee")
+        self.assertIsNotNone(markup)
+        self.assertIn("Sem marca", markup.inline_keyboard[0][0].text)
+        self.assertEqual(markup.inline_keyboard[0][0].callback_data, "wm:tok")
+        self.assertIsNone(bot._watermark_keyboard("tok", "instagram"))
+
 
 class StartupAndDockerTests(unittest.TestCase):
     def test_application_builds_without_network(self):
         app = bot.build_application()
         self.assertIsNotNone(app)
         handler_count = sum(len(group) for group in app.handlers.values())
-        self.assertGreaterEqual(handler_count, 8)
+        self.assertGreaterEqual(handler_count, 9)
 
     def test_docker_runtime(self):
         root = Path(__file__).resolve().parents[1]
         docker = (root / "Dockerfile").read_text(encoding="utf-8")
         requirements = (root / "requirements.txt").read_text(encoding="utf-8")
         self.assertIn("ffmpeg", docker)
-        self.assertIn("node:20", docker)
+        self.assertIn("node:22", docker)
+        self.assertIn("deno", docker.lower())
         self.assertIn("bgutil-ytdlp-pot-provider", docker)
         self.assertIn("bgutil-ytdlp-pot-provider", requirements)
         self.assertIn("PYTHONPATH=/app", docker)
