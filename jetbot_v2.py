@@ -11,6 +11,7 @@ import os
 import re
 import secrets
 import shutil
+import subprocess
 import tempfile
 import time
 import traceback
@@ -19,7 +20,7 @@ from urllib.parse import unquote
 
 import requests
 import yt_dlp
-from telegram import BotCommand
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -39,6 +40,7 @@ MAX_FILE_MB = int(os.environ.get("MAX_FILE_MB", "49"))
 YT_FREE_LIMIT = legacy.YT_FREE_LIMIT
 DOWNLOADS_DIR = legacy.DOWNLOADS_DIR
 DOWNLOAD_DIR = legacy.DOWNLOAD_DIR
+WATERMARK_TTL = 15 * 60
 
 # Reexporta itens importantes para testes/revisão e compatibilidade.
 is_premium = legacy.is_premium
@@ -179,6 +181,78 @@ def _download_direct(url: str, output: Path):
             for chunk in response.iter_content(chunk_size=512 * 1024):
                 if chunk:
                     file.write(chunk)
+    return output
+
+
+def _watermark_keyboard(token: str, platform: str):
+    if platform != "shopee":
+        return None
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("✨ Sem marca d'água", callback_data=f"wm:{token}")]]
+    )
+
+
+def _probe_dimensions(path: Path):
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "csv=p=0:s=x",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    width, height = result.stdout.strip().split("x", 1)
+    return int(width), int(height)
+
+
+def remove_shopee_watermark(source: Path, output: Path):
+    """Atenua a marca visual da Shopee quando ela já veio gravada no vídeo.
+
+    Primeiro o downloader tenta obter a mídia original. Este filtro só é usado
+    quando o usuário pede explicitamente a versão tratada.
+    """
+    width, height = _probe_dimensions(source)
+    x = max(2, int(width * 0.015))
+    y = max(2, int(height * 0.43))
+    w = max(24, min(width - x - 2, int(width * 0.38)))
+    h = max(18, min(height - y - 2, int(height * 0.12)))
+    vf = f"delogo=x={x}:y={y}:w={w}:h={h}:show=0"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(source),
+            "-vf",
+            vf,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "22",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "160k",
+            "-movflags",
+            "+faststart",
+            str(output),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=180,
+    )
     return output
 
 
@@ -375,11 +449,18 @@ async def baixar_video(update, context):
             )
             return
         await status.edit_text("📤 Enviando para o Telegram...")
+        markup = None
+        if platform == "shopee":
+            token = secrets.token_urlsafe(6)
+            pending = context.bot_data.setdefault("wm_pending", {})
+            pending[token] = {"url": url, "uid": uid, "platform": platform, "ts": time.time()}
+            markup = _watermark_keyboard(token, platform)
         with path.open("rb") as media:
             await update.message.reply_video(
                 media,
                 caption="✅ Seu vídeo está aqui!",
                 supports_streaming=True,
+                reply_markup=markup,
             )
         if not legacy.is_premium(uid):
             novo = legacy.incrementar_download(uid)
@@ -398,6 +479,49 @@ async def baixar_video(update, context):
     except Exception as exc:
         traceback.print_exc()
         await status.edit_text(f"❌ Erro ao baixar: {type(exc).__name__}: {exc}")
+    finally:
+        if result and result.get("temp_dir"):
+            shutil.rmtree(result["temp_dir"], ignore_errors=True)
+
+
+async def watermark_callback(update, context):
+    query = update.callback_query
+    await query.answer()
+    token = (query.data or "").split(":", 1)[-1]
+    pending = context.bot_data.setdefault("wm_pending", {})
+    item = pending.get(token)
+    if not item or time.time() - item.get("ts", 0) > WATERMARK_TTL:
+        pending.pop(token, None)
+        return await query.message.reply_text("⌛ Essa opção expirou. Envie o link novamente.")
+    if query.from_user.id != item.get("uid"):
+        return await query.answer("Essa opção pertence a outro usuário.", show_alert=True)
+
+    status = await query.message.reply_text("✨ Preparando versão sem marca d'água...")
+    result = None
+    try:
+        result = await asyncio.to_thread(download_media, item["url"], item["uid"])
+        source = Path(result["path"])
+        output = Path(result["temp_dir"]) / "shopee-sem-marca.mp4"
+        await asyncio.to_thread(remove_shopee_watermark, source, output)
+        if output.stat().st_size > MAX_FILE_MB * 1024 * 1024:
+            return await status.edit_text(
+                f"⚠️ A versão tratada ficou maior que {MAX_FILE_MB} MB e não pode ser enviada."
+            )
+        await status.edit_text("📤 Enviando versão tratada...")
+        with output.open("rb") as media:
+            await query.message.reply_video(
+                media,
+                caption="✨ Versão tratada sem a marca visível.",
+                supports_streaming=True,
+            )
+        pending.pop(token, None)
+        try:
+            await status.delete()
+        except Exception:
+            pass
+    except Exception:
+        traceback.print_exc()
+        await status.edit_text("❌ Não consegui remover a marca deste vídeo sem prejudicar o arquivo.")
     finally:
         if result and result.get("temp_dir"):
             shutil.rmtree(result["temp_dir"], ignore_errors=True)
@@ -439,6 +563,8 @@ def build_application():
         )
     )
 
+    # O callback de marca precisa vir antes do handler legado genérico.
+    app.add_handler(CallbackQueryHandler(watermark_callback, pattern=r"^wm:"))
     app.add_handler(CallbackQueryHandler(legacy.callbacks_handler))
     return app
 
