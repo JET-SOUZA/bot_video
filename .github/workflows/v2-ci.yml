@@ -38,5 +38,9 @@ jobs:
         run: |
           docker run --rm --entrypoint ffmpeg jetbot-v2-ci -version
           docker run --rm --entrypoint node jetbot-v2-ci --version
+      - name: Check YouTube PO token provider starts
+        run: >-
+          docker run --rm --entrypoint sh jetbot-v2-ci -c
+          'node /root/bgutil-ytdlp-pot-provider/server/build/main.js >/tmp/bgutil.log 2>&1 & pid=$!; sleep 3; kill -0 $pid; kill $pid; cat /tmp/bgutil.log'
       - name: Import V2 inside Docker
         run: docker run --rm -e TOKEN='123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi' jetbot-v2-ci python -c "import jetbot_v2; app=jetbot_v2.build_application(); assert app is not None; print('docker-import-ok')"
