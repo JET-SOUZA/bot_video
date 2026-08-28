@@ -11,7 +11,6 @@ import os
 import re
 import secrets
 import shutil
-import subprocess
 import tempfile
 import time
 import traceback
@@ -20,7 +19,7 @@ from urllib.parse import unquote
 
 import requests
 import yt_dlp
-from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import BotCommand
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -40,7 +39,6 @@ MAX_FILE_MB = int(os.environ.get("MAX_FILE_MB", "49"))
 YT_FREE_LIMIT = legacy.YT_FREE_LIMIT
 DOWNLOADS_DIR = legacy.DOWNLOADS_DIR
 DOWNLOAD_DIR = legacy.DOWNLOAD_DIR
-WATERMARK_TTL = 15 * 60
 
 # Reexporta itens importantes para testes/revisão e compatibilidade.
 is_premium = legacy.is_premium
@@ -159,9 +157,15 @@ def _find_media(directory: Path, preferred_suffix=None, prefix=None):
 
 
 def _resolve_shopee(url: str):
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) "
+            "AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1"
+        )
+    }
     if "shp.ee" in url:
         try:
-            url = requests.get(url, allow_redirects=True, timeout=10).url
+            url = requests.get(url, allow_redirects=True, timeout=12, headers=headers).url
         except Exception:
             pass
     if "redir=" in url:
@@ -175,7 +179,14 @@ def _resolve_shopee(url: str):
 
 
 def _download_direct(url: str, output: Path):
-    with requests.get(url, stream=True, timeout=30) as response:
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) "
+            "AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1"
+        ),
+        "Referer": "https://sv.shopee.com.br/",
+    }
+    with requests.get(url, stream=True, timeout=30, headers=headers) as response:
         response.raise_for_status()
         with output.open("wb") as file:
             for chunk in response.iter_content(chunk_size=512 * 1024):
@@ -184,76 +195,148 @@ def _download_direct(url: str, output: Path):
     return output
 
 
-def _watermark_keyboard(token: str, platform: str):
-    if platform != "shopee":
-        return None
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton("✨ Sem marca d'água", callback_data=f"wm:{token}")]]
-    )
+def _iter_media_candidates(value, path=""):
+    """Percorre respostas JSON/estruturas e encontra URLs de mídia."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            child = f"{path}.{key}" if path else str(key)
+            yield from _iter_media_candidates(item, child)
+        return
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            yield from _iter_media_candidates(item, f"{path}[{index}]")
+        return
+    if not isinstance(value, str):
+        return
+
+    candidate = value.replace("\\u002F", "/").replace("\\/", "/").replace("&amp;", "&")
+    if candidate.startswith("//"):
+        candidate = "https:" + candidate
+    if not candidate.startswith("http"):
+        return
+    lowered = candidate.lower()
+    if any(ext in lowered for ext in (".mp4", ".m3u8", "video", "play")):
+        yield path.lower(), candidate
 
 
-def _probe_dimensions(path: Path):
-    result = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=width,height",
-            "-of",
-            "csv=p=0:s=x",
-            str(path),
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=20,
-    )
-    width, height = result.stdout.strip().split("x", 1)
-    return int(width), int(height)
+def _rank_shopee_candidate(path: str, url: str):
+    """Pontua URLs priorizando o arquivo original e penalizando versões marcadas."""
+    text = f"{path} {url}".lower()
+    score = 0
+    for hint, points in (
+        ("original", 80),
+        ("origin", 70),
+        ("source", 60),
+        ("raw", 55),
+        ("download", 45),
+        ("video_url", 35),
+        ("play_url", 30),
+        ("play", 20),
+        (".mp4", 25),
+    ):
+        if hint in text:
+            score += points
+    for hint, points in (
+        ("watermark", 120),
+        ("watermarked", 120),
+        ("wm", 70),
+        ("logo", 60),
+        ("preview", 35),
+        ("thumb", 80),
+        ("cover", 80),
+    ):
+        if hint in text:
+            score -= points
+    if ".m3u8" in text:
+        score -= 5
+    return score
 
 
-def remove_shopee_watermark(source: Path, output: Path):
-    """Atenua a marca visual da Shopee quando ela já veio gravada no vídeo.
+def _extract_shopee_original_url(url: str):
+    """Tenta obter a fonte original da Shopee antes de baixar a versão renderizada.
 
-    Primeiro o downloader tenta obter a mídia original. Este filtro só é usado
-    quando o usuário pede explicitamente a versão tratada.
+    A Shopee muda campos/endpoints com frequência; por isso a função coleta
+    candidatos tanto da API de compartilhamento quanto do HTML e escolhe a
+    opção com sinais de mídia original, evitando explicitamente variantes com
+    watermark/logo/preview quando existem alternativas.
     """
-    width, height = _probe_dimensions(source)
-    x = max(2, int(width * 0.015))
-    y = max(2, int(height * 0.43))
-    w = max(24, min(width - x - 2, int(width * 0.38)))
-    h = max(18, min(height - y - 2, int(height * 0.12)))
-    vf = f"delogo=x={x}:y={y}:w={w}:h={h}:show=0"
-    subprocess.run(
-        [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(source),
-            "-vf",
-            vf,
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "22",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "160k",
-            "-movflags",
-            "+faststart",
-            str(output),
-        ],
-        check=True,
-        capture_output=True,
-        timeout=180,
-    )
-    return output
+    resolved = _resolve_shopee(url)
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) "
+            "AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1"
+        ),
+        "Accept": "text/html,application/json;q=0.9,*/*;q=0.8",
+        "Referer": "https://sv.shopee.com.br/",
+    }
+    candidates = []
+
+    share_match = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", resolved)
+    if not share_match:
+        try:
+            page = requests.get(resolved, timeout=12, headers=headers)
+            page.raise_for_status()
+            html = page.text
+            share_match = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", html)
+        except Exception:
+            html = ""
+    else:
+        try:
+            html = requests.get(resolved, timeout=12, headers=headers).text
+        except Exception:
+            html = ""
+
+    if share_match:
+        share_id = share_match.group(1)
+        api_urls = [
+            f"https://sv.shopee.com.br/api/v4/share/video?shareVideoId={share_id}",
+            f"https://sv.shopee.com.br/api/v2/share/video?shareVideoId={share_id}",
+        ]
+        for api_url in api_urls:
+            try:
+                response = requests.get(api_url, timeout=12, headers=headers)
+                if response.ok:
+                    payload = response.json()
+                    candidates.extend(_iter_media_candidates(payload))
+            except Exception:
+                pass
+
+    if html:
+        # URLs explícitas no HTML/estado hidratado da página.
+        for match in re.finditer(r"https?:\\?/\\?/[^\s\"'<>]+?(?:\.mp4|\.m3u8)[^\s\"'<>]*", html):
+            raw = match.group(0).replace("\\/", "/")
+            candidates.append(("html", raw))
+        # Também captura campos JSON de vídeo sem depender do nome exato.
+        for match in re.finditer(
+            r'"([^"\\]*(?:original|origin|source|play|video)[^"\\]*)"\s*:\s*"(https?:[^"\\]+(?:\\.[^"\\]*)?)"',
+            html,
+            flags=re.IGNORECASE,
+        ):
+            raw = match.group(2).replace("\\u002F", "/").replace("\\/", "/")
+            candidates.append((match.group(1).lower(), raw))
+
+    # O extrator antigo continua útil como candidato, mas não ganha prioridade.
+    try:
+        legacy_url = legacy.extrair_video_shopee(url)
+        if legacy_url:
+            candidates.append(("legacy.play", legacy_url))
+    except Exception:
+        pass
+
+    dedup = {}
+    for path, candidate in candidates:
+        if not candidate or not candidate.startswith("http"):
+            continue
+        dedup[candidate] = max(dedup.get(candidate, -10_000), _rank_shopee_candidate(path, candidate))
+    if not dedup:
+        return None
+
+    ranked = sorted(dedup.items(), key=lambda item: item[1], reverse=True)
+    for candidate, _score in ranked:
+        lowered = candidate.lower()
+        if not any(bad in lowered for bad in ("watermark", "watermarked", "logo=", "preview")):
+            return candidate
+    return ranked[0][0]
 
 
 def build_general_ydl_options(temp_dir: Path, platform: str, cookiefile=None):
@@ -293,6 +376,29 @@ def download_media(url: str, uid: int):
     opts = build_general_ydl_options(temp_dir, platform, cookiefile)
 
     try:
+        # Shopee: fonte original primeiro. Evita baixar a composição visual com
+        # logo/tarja e dispensa qualquer delogo/borrão posterior.
+        if platform == "shopee":
+            clean_url = _extract_shopee_original_url(original_url)
+            if clean_url:
+                if ".m3u8" in clean_url.lower():
+                    direct_opts = dict(opts)
+                    direct_opts["outtmpl"] = str(temp_dir / "shopee-original.%(ext)s")
+                    with yt_dlp.YoutubeDL(direct_opts) as ydl:
+                        info = ydl.extract_info(clean_url, download=True)
+                    media = _find_media(temp_dir, ".mp4")
+                else:
+                    media = _download_direct(clean_url, temp_dir / "shopee-original.mp4")
+                    info = {"title": "Shopee Vídeo - original"}
+                if media and Path(media).exists():
+                    return {
+                        "path": str(media),
+                        "title": info.get("title") or "Shopee Vídeo",
+                        "platform": platform,
+                        "temp_dir": str(temp_dir),
+                        "source": "shopee-original",
+                    }
+
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=True)
@@ -304,9 +410,10 @@ def download_media(url: str, uid: int):
                 "title": info.get("title") or "Vídeo",
                 "platform": platform,
                 "temp_dir": str(temp_dir),
+                "source": "yt-dlp",
             }
         except yt_dlp.utils.DownloadError:
-            # Mantém os extratores legados de Instagram/Shopee como fallback.
+            # Mantém os extratores legados como último fallback de compatibilidade.
             direct_url = None
             if platform == "shopee":
                 direct_url = legacy.extrair_video_shopee(original_url)
@@ -320,6 +427,7 @@ def download_media(url: str, uid: int):
                 "title": PLATFORM_NAMES[platform],
                 "platform": platform,
                 "temp_dir": str(temp_dir),
+                "source": "legacy-fallback",
             }
     except Exception:
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -449,18 +557,11 @@ async def baixar_video(update, context):
             )
             return
         await status.edit_text("📤 Enviando para o Telegram...")
-        markup = None
-        if platform == "shopee":
-            token = secrets.token_urlsafe(6)
-            pending = context.bot_data.setdefault("wm_pending", {})
-            pending[token] = {"url": url, "uid": uid, "platform": platform, "ts": time.time()}
-            markup = _watermark_keyboard(token, platform)
         with path.open("rb") as media:
             await update.message.reply_video(
                 media,
                 caption="✅ Seu vídeo está aqui!",
                 supports_streaming=True,
-                reply_markup=markup,
             )
         if not legacy.is_premium(uid):
             novo = legacy.incrementar_download(uid)
@@ -479,49 +580,6 @@ async def baixar_video(update, context):
     except Exception as exc:
         traceback.print_exc()
         await status.edit_text(f"❌ Erro ao baixar: {type(exc).__name__}: {exc}")
-    finally:
-        if result and result.get("temp_dir"):
-            shutil.rmtree(result["temp_dir"], ignore_errors=True)
-
-
-async def watermark_callback(update, context):
-    query = update.callback_query
-    await query.answer()
-    token = (query.data or "").split(":", 1)[-1]
-    pending = context.bot_data.setdefault("wm_pending", {})
-    item = pending.get(token)
-    if not item or time.time() - item.get("ts", 0) > WATERMARK_TTL:
-        pending.pop(token, None)
-        return await query.message.reply_text("⌛ Essa opção expirou. Envie o link novamente.")
-    if query.from_user.id != item.get("uid"):
-        return await query.answer("Essa opção pertence a outro usuário.", show_alert=True)
-
-    status = await query.message.reply_text("✨ Preparando versão sem marca d'água...")
-    result = None
-    try:
-        result = await asyncio.to_thread(download_media, item["url"], item["uid"])
-        source = Path(result["path"])
-        output = Path(result["temp_dir"]) / "shopee-sem-marca.mp4"
-        await asyncio.to_thread(remove_shopee_watermark, source, output)
-        if output.stat().st_size > MAX_FILE_MB * 1024 * 1024:
-            return await status.edit_text(
-                f"⚠️ A versão tratada ficou maior que {MAX_FILE_MB} MB e não pode ser enviada."
-            )
-        await status.edit_text("📤 Enviando versão tratada...")
-        with output.open("rb") as media:
-            await query.message.reply_video(
-                media,
-                caption="✨ Versão tratada sem a marca visível.",
-                supports_streaming=True,
-            )
-        pending.pop(token, None)
-        try:
-            await status.delete()
-        except Exception:
-            pass
-    except Exception:
-        traceback.print_exc()
-        await status.edit_text("❌ Não consegui remover a marca deste vídeo sem prejudicar o arquivo.")
     finally:
         if result and result.get("temp_dir"):
             shutil.rmtree(result["temp_dir"], ignore_errors=True)
@@ -563,8 +621,6 @@ def build_application():
         )
     )
 
-    # O callback de marca precisa vir antes do handler legado genérico.
-    app.add_handler(CallbackQueryHandler(watermark_callback, pattern=r"^wm:"))
     app.add_handler(CallbackQueryHandler(legacy.callbacks_handler))
     return app
 
