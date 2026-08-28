@@ -1,17 +1,18 @@
 """JetBot V2 runtime entrypoint.
 
-Aplica uma política estrita para Shopee Video: nunca entrega como original
-uma URL que veio de campo/rota marcada como watermark. Se a página pública
-só expuser a versão carimbada, o bot falha com mensagem clara em vez de
-baixar a versão marcada silenciosamente.
+Política estrita para Shopee Video: nunca entrega como original uma URL
+proveniente de campo/rota marcada, nem uma URL sem evidência positiva de ser
+fonte limpa. Também inspeciona payloads Next.js da página compartilhada para
+tentar localizar a mídia master/original antes de desistir.
 """
 
+import json
 import os
 import re
 import shutil
 import tempfile
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import requests
 import yt_dlp
@@ -25,8 +26,11 @@ BAD_SHOPEE_HINTS = (
     "watermarkvideourl",
     "watermark_video",
     "play_watermark",
+    "with_watermark",
     "preview",
     "rendered",
+    "render",
+    "transcode",
     "logo",
     "cover",
     "thumb",
@@ -42,9 +46,11 @@ GOOD_SHOPEE_HINTS = (
     "raw",
     "upload",
     "download",
-    "video_url",
-    "play_url",
 )
+
+# Campos genéricos como play/video_url não bastam para provar que a mídia é
+# limpa, porque a Shopee também usa esses nomes para variantes renderizadas.
+TRUSTED_SHOPEE_HINTS = GOOD_SHOPEE_HINTS
 
 
 def _marked_candidate(path: str, url: str) -> bool:
@@ -52,22 +58,65 @@ def _marked_candidate(path: str, url: str) -> bool:
     return any(hint in text for hint in BAD_SHOPEE_HINTS)
 
 
+def _trusted_clean_candidate(path: str, url: str) -> bool:
+    text = f"{path} {url}".lower()
+    if _marked_candidate(path, url):
+        return False
+    return any(hint in text for hint in TRUSTED_SHOPEE_HINTS)
+
+
 def _clean_score(path: str, url: str) -> int:
     text = f"{path} {url}".lower()
     score = app._rank_shopee_candidate(path, url)
     for hint in GOOD_SHOPEE_HINTS:
         if hint in text:
-            score += 50
+            score += 80
     if ".mp4" in text:
         score += 20
+    if _marked_candidate(path, url):
+        score -= 1000
     return score
+
+
+def _iter_next_payloads(html: str, share_id: str, headers: dict):
+    """Coleta __NEXT_DATA__ e os JSONs de hidratação do Next.js."""
+    payloads = []
+    try:
+        match = re.search(
+            r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>',
+            html,
+            re.S | re.I,
+        )
+        if not match:
+            return payloads
+
+        data = json.loads(match.group(1))
+        payloads.append(("next_data", data))
+        build_id = data.get("buildId") if isinstance(data, dict) else None
+        if not build_id:
+            return payloads
+
+        encoded = quote(share_id, safe="")
+        for data_url in (
+            f"https://sv.shopee.com.br/share-web/_next/data/{build_id}/share-video/{encoded}.json",
+            f"https://sv.shopee.com.br/_next/data/{build_id}/share-video/{encoded}.json",
+        ):
+            try:
+                response = requests.get(data_url, timeout=15, headers=headers)
+                content_type = (response.headers.get("content-type") or "").lower()
+                if response.ok and "json" in content_type:
+                    payloads.append(("next_json", response.json()))
+            except Exception as exc:
+                print(f"[JetBot Shopee] Next.js data fetch failed: {type(exc).__name__}: {exc}")
+    except Exception as exc:
+        print(f"[JetBot Shopee] Next.js parse failed: {type(exc).__name__}: {exc}")
+    return payloads
 
 
 def _external_clean_source(url: str):
     """Usa somente um extrator configurado pelo dono do bot.
 
-    Não há endpoint de terceiro embutido. Se SHOPEE_EXTRACTOR_URL existir,
-    espera JSON no formato {success, videoUrl} ou {videoUrl}.
+    Se SHOPEE_EXTRACTOR_URL existir, espera JSON com videoUrl/video_url/url.
     """
     endpoint = (os.environ.get("SHOPEE_EXTRACTOR_URL") or "").strip()
     if not endpoint:
@@ -79,7 +128,9 @@ def _external_clean_source(url: str):
         candidate = payload.get("videoUrl") or payload.get("video_url") or payload.get("url")
         if not candidate or not str(candidate).startswith("http"):
             return None
-        if _marked_candidate("external.videoUrl", str(candidate)):
+        # Serviço externo explicitamente configurado é uma fonte confiável,
+        # mas ainda recusamos URLs que se anunciem como watermark.
+        if _marked_candidate("external.original", str(candidate)):
             return None
         return str(candidate)
     except Exception as exc:
@@ -111,27 +162,36 @@ def strict_extract_shopee_original(url: str):
     if not share_match and html:
         share_match = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", html)
 
-    if share_match:
-        share_id = share_match.group(1)
+    share_id = share_match.group(1) if share_match else None
+    if share_id:
         for version in ("v4", "v2"):
             api_url = f"https://sv.shopee.com.br/api/{version}/share/video?shareVideoId={share_id}"
             try:
                 response = requests.get(api_url, timeout=15, headers=headers)
                 if response.ok:
-                    candidates.extend(app._iter_media_candidates(response.json()))
+                    for path, candidate in app._iter_media_candidates(response.json()):
+                        candidates.append((f"api.{version}.{path}", candidate))
             except Exception as exc:
                 print(f"[JetBot Shopee] {version} share API failed: {type(exc).__name__}: {exc}")
 
+        if html:
+            for label, payload in _iter_next_payloads(html, share_id, headers):
+                for path, candidate in app._iter_media_candidates(payload):
+                    candidates.append((f"{label}.{path}", candidate))
+
     if html:
-        # Mantém o nome do campo para sabermos se a URL veio de watermarkVideoUrl.
+        # Mantém o nome do campo para identificar watermarkVideoUrl e também
+        # campos master/original serializados no HTML.
         field_pattern = re.compile(
             r'"([^"\\]*(?:original|origin|source|master|raw|upload|download|play|video|watermark)[^"\\]*)"\s*:\s*"(https?:[^"\\]+)"',
             flags=re.IGNORECASE,
         )
         for match in field_pattern.finditer(html):
             raw = match.group(2).replace("\\u002F", "/").replace("\\/", "/")
-            candidates.append((match.group(1).lower(), raw))
+            candidates.append((f"html.field.{match.group(1).lower()}", raw))
 
+        # URLs sem rótulo servem apenas para diagnóstico. Não serão aceitas
+        # como limpas sem um sinal positivo no próprio caminho/URL.
         for match in re.finditer(r"https?:\\?/\\?/[^\s\"'<>]+?(?:\.mp4|\.m3u8)[^\s\"'<>]*", html):
             raw = match.group(0).replace("\\/", "/")
             candidates.append(("html.unlabeled", raw))
@@ -142,10 +202,11 @@ def strict_extract_shopee_original(url: str):
             continue
         candidate = str(candidate)
         marked = _marked_candidate(path, candidate)
+        trusted = _trusted_clean_candidate(path, candidate)
         score = _clean_score(path, candidate)
         current = unique.get(candidate)
         if current is None or score > current[0]:
-            unique[candidate] = (score, marked, path)
+            unique[candidate] = (score, marked, trusted, path)
 
     ranked = sorted(
         ((url_value, *meta) for url_value, meta in unique.items()),
@@ -153,16 +214,18 @@ def strict_extract_shopee_original(url: str):
         reverse=True,
     )
 
-    for candidate, score, marked, path in ranked[:12]:
-        host = urlparse(candidate).netloc
+    for candidate, score, marked, trusted, path in ranked[:12]:
+        parsed = urlparse(candidate)
+        leaf = Path(parsed.path).name[:80] or "/"
         print(
-            f"[JetBot Shopee] candidate path={path} score={score} marked={marked} host={host}"
+            f"[JetBot Shopee] candidate path={path} score={score} marked={marked} "
+            f"trusted={trusted} host={parsed.netloc} file={leaf}"
         )
 
-    clean = [item for item in ranked if not item[2]]
+    clean = [item for item in ranked if not item[2] and item[3]]
     if clean:
-        candidate, score, _marked, path = clean[0]
-        print(f"[JetBot Shopee] clean source selected path={path} score={score}")
+        candidate, score, _marked, _trusted, path = clean[0]
+        print(f"[JetBot Shopee] trusted clean source selected path={path} score={score}")
         return candidate
 
     external = _external_clean_source(url)
@@ -170,7 +233,10 @@ def strict_extract_shopee_original(url: str):
         print("[JetBot Shopee] clean source selected from configured extractor")
         return external
 
-    print("[JetBot Shopee] CLEAN_SOURCE_NOT_FOUND: only marked/untrusted sources were exposed")
+    print(
+        f"[JetBot Shopee] CLEAN_SOURCE_NOT_FOUND share_id={share_id or 'unknown'} "
+        f"candidates={len(ranked)}"
+    )
     return None
 
 
@@ -185,7 +251,8 @@ def strict_download_media(url: str, uid: int):
         clean_url = strict_extract_shopee_original(url)
         if not clean_url:
             raise RuntimeError(
-                "A Shopee só expôs a versão com marca para este link; o bot não vai enviar uma cópia marcada como original."
+                "Não encontrei uma fonte original confiável para este Shopee Vídeo. "
+                "A versão marcada foi bloqueada e não será enviada como original."
             )
 
         if ".m3u8" in clean_url.lower():
