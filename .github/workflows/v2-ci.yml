@@ -18,7 +18,7 @@ jobs:
       - name: Install dependencies
         run: python -m pip install --upgrade pip && pip install -r requirements.txt
       - name: Syntax check
-        run: python -m py_compile bot.py jetbot_v2.py youtube_downloader.py tests/test_jetbot_v2.py
+        run: python -m compileall -q bot.py jetbot_v2.py youtube_downloader.py media_fidelity_patch.py shopee_timeline_patch.py tests
       - name: Import and application startup smoke test
         env:
           TOKEN: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi'
@@ -34,14 +34,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build Docker image
         run: docker build -t jetbot-v2-ci .
-      - name: Check FFmpeg, Node and Deno
+      - name: Check FFmpeg and Node
         run: |
           docker run --rm --entrypoint ffmpeg jetbot-v2-ci -version
           docker run --rm --entrypoint node jetbot-v2-ci --version
-          docker run --rm --entrypoint deno jetbot-v2-ci --version
-      - name: Check YouTube PO token provider starts
+      - name: Check YouTube PO token HTTP provider responds
         run: >-
           docker run --rm --entrypoint sh jetbot-v2-ci -c
-          'node /root/bgutil-ytdlp-pot-provider/server/build/main.js >/tmp/bgutil.log 2>&1 & pid=$!; sleep 3; kill -0 $pid; kill $pid; cat /tmp/bgutil.log'
+          'node /root/bgutil-ytdlp-pot-provider/server/build/main.js >/tmp/bgutil.log 2>&1 & pid=$!; i=0; until curl -fsS http://127.0.0.1:4416/ping; do i=$((i+1)); [ $i -lt 50 ] || { cat /tmp/bgutil.log; exit 1; }; sleep .2; done; kill $pid; wait $pid 2>/dev/null || true; cat /tmp/bgutil.log'
       - name: Import V2 inside Docker
-        run: docker run --rm -e TOKEN='123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi' jetbot-v2-ci python -c "import jetbot_v2; app=jetbot_v2.build_application(); assert app is not None; print('docker-import-ok')"
+        run: docker run --rm --entrypoint python -e TOKEN='123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi' jetbot-v2-ci -c "import jetbot_v2, media_fidelity_patch; app=jetbot_v2.build_application(); assert app is not None; print('docker-import-ok')"
