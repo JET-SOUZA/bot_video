@@ -153,6 +153,18 @@ runtime.strict_extract_shopee_original = extract_shopee_prefer_original
 runtime.app._extract_shopee_original_url = extract_shopee_prefer_original
 runtime.app.download_media = runtime.strict_download_media
 
+# telegram_fit_patch is imported before this entrypoint by Docker. The Shopee
+# runtime assignment above used to overwrite that wrapper, which is why X files
+# over 49 MB were still rejected before compression. Re-bind the fit wrapper to
+# the final strict downloader so every non-YouTube result is size-checked.
+try:
+    import telegram_fit_patch as _telegram_fit
+    _telegram_fit._ORIGINAL_DOWNLOAD_MEDIA = runtime.strict_download_media
+    runtime.app.download_media = _telegram_fit.download_media_with_telegram_fit
+    print("[JetBot Media] Telegram size-fit wrapper re-applied after Shopee runtime")
+except Exception as exc:
+    print(f"[JetBot Media] Telegram size-fit reapply failed: {type(exc).__name__}: {exc}")
+
 
 if __name__ == "__main__":
     runtime.app.main()
