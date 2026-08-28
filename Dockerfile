@@ -42,5 +42,6 @@ RUN mkdir -p /app/downloads && chmod -R a+rw /app/downloads
 
 # A V2 tenta a fonte original da Shopee primeiro. Quando ela não estiver
 # disponível, usa a melhor mídia reproduzível encontrada em vez de bloquear o
-# download. Covers e thumbnails continuam excluídos do fallback.
-CMD ["sh", "-c", "node /root/bgutil-ytdlp-pot-provider/server/build/main.js 2>&1 & exec python -c \"import sitecustomize, shopee_structured_patch, runpy; runpy.run_path('/app/run_v2_fallback.py', run_name='__main__')\""]
+# download. O diagnóstico por source-map lê apenas assets públicos do frontend
+# para descobrir a rota real da mídia limpa; não envia cookies nem credenciais.
+CMD ["sh", "-c", "node /root/bgutil-ytdlp-pot-provider/server/build/main.js 2>&1 & exec python -c \"import sitecustomize, shopee_structured_patch, shopee_sourcemap_probe, runpy; runpy.run_path('/app/run_v2_fallback.py', run_name='__main__')\""]
