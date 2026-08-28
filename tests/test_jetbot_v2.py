@@ -68,10 +68,10 @@ class YoutubeMotorTests(unittest.TestCase):
         self.assertEqual(opts["postprocessors"][0]["key"], "FFmpegExtractAudio")
         self.assertEqual(opts["postprocessors"][0]["preferredcodec"], "mp3")
 
-    def test_runtime_patch_forces_mweb_and_bgutil_http(self):
+    def test_runtime_patch_uses_web_safari_primary_and_bgutil_http(self):
         ydl = bot.yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True})
         args = ydl.params["extractor_args"]
-        self.assertIn("mweb", args["youtube"]["player_client"])
+        self.assertIn("web_safari", args["youtube"]["player_client"])
         self.assertEqual(args["youtubepot-bgutilhttp"]["base_url"], ["http://127.0.0.1:4416"])
 
 
