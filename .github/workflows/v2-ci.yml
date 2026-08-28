@@ -1,0 +1,42 @@
+name: JetBot V2 CI
+
+on:
+  push:
+    branches: [jetbot-v2]
+  pull_request:
+    branches: [main]
+
+jobs:
+  python-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+      - name: Syntax check
+        run: python -m py_compile bot.py jetbot_v2.py youtube_downloader.py tests/test_jetbot_v2.py
+      - name: Import and application startup smoke test
+        env:
+          TOKEN: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi'
+        run: python -c "import jetbot_v2; app=jetbot_v2.build_application(); assert app is not None; print('application-build-ok')"
+      - name: Unit tests
+        env:
+          TOKEN: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi'
+        run: python -m unittest discover -s tests -v
+
+  docker-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: docker build -t jetbot-v2-ci .
+      - name: Check FFmpeg and Node
+        run: |
+          docker run --rm --entrypoint ffmpeg jetbot-v2-ci -version
+          docker run --rm --entrypoint node jetbot-v2-ci --version
+      - name: Import V2 inside Docker
+        run: docker run --rm -e TOKEN='123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi' jetbot-v2-ci python -c "import jetbot_v2; app=jetbot_v2.build_application(); assert app is not None; print('docker-import-ok')"
