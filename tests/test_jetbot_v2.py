@@ -7,6 +7,8 @@ from unittest import mock
 
 os.environ.setdefault("TOKEN", "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi")
 
+# Garante que o hardening de runtime também é exercitado fora do Docker.
+import sitecustomize  # noqa: F401
 import jetbot_v2 as bot
 
 
@@ -66,6 +68,15 @@ class YoutubeMotorTests(unittest.TestCase):
         self.assertEqual(opts["format"], "bestaudio/best")
         self.assertEqual(opts["postprocessors"][0]["key"], "FFmpegExtractAudio")
         self.assertEqual(opts["postprocessors"][0]["preferredcodec"], "mp3")
+
+    def test_runtime_patch_forces_mweb_and_bgutil_http(self):
+        ydl = bot.yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True})
+        args = ydl.params["extractor_args"]
+        self.assertIn("mweb", args["youtube"]["player_client"])
+        self.assertEqual(
+            args["youtubepot-bgutilhttp"]["base_url"],
+            ["http://127.0.0.1:4416"],
+        )
 
 
 class FakeYDL:
@@ -129,8 +140,8 @@ class StartupAndDockerTests(unittest.TestCase):
         self.assertIn("node:20", docker)
         self.assertIn("bgutil-ytdlp-pot-provider", docker)
         self.assertIn("bgutil-ytdlp-pot-provider", requirements)
-        self.assertIn("server/build/main.js", docker)
-        self.assertIn("exec python jetbot_v2.py", docker)
+        self.assertIn("PYTHONPATH=/app", docker)
+        self.assertIn('CMD ["sh", "-c"', docker)
 
 
 if __name__ == "__main__":
