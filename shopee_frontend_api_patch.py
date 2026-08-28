@@ -1,12 +1,12 @@
 """Shopee Video frontend API bridge for the V2 staging runtime.
 
 The public share-video bundle calls an exported helper (``HP``) to load the
-post payload.  This patch discovers that helper from the public JS already
+post payload. This patch discovers that helper from the public JS already
 served to browsers, reconstructs only a simple read payload containing the
 public post id, and performs at most one matching read request per download.
 
 It does not authenticate, bypass access controls, mutate Shopee state, or guess
-private endpoints.  If discovery is ambiguous or the request is rejected, the
+private endpoints. If discovery is ambiguous or the request is rejected, the
 normal V2 fallback remains unchanged.
 """
 
@@ -24,7 +24,7 @@ _DISCOVERY = {}
 
 _BASE_RE = re.compile(r'\b([A-Za-z_$][\w$]*)=["\'](/v1/share/h5)["\']')
 _CALL_RE = re.compile(
-    r'([A-Za-z_$][\w$]*)\.Z\.(get|post)\(""\.concat\(([A-Za-z_$][\w$]*),["\']([^"\']+)["\']\),(\{.{0,700}?\})\)\.then',
+    r'([A-Za-z_$][\w$]*)\.Z\.(get|post)\(""\.concat\(([A-Za-z_$][\w$]*),["\']([^"\']+)["\']\),(\{.{0,1800}?\})\)(?:\.then|[,;)])',
     re.I | re.S,
 )
 _EXPORT_RE = re.compile(
@@ -32,22 +32,66 @@ _EXPORT_RE = re.compile(
     re.S,
 )
 _FUNC_RE = re.compile(r'([A-Za-z_$][\w$]*)=function\(([^)]*)\)\{return\s*$')
+_ASSIGN_FUNC_RE = re.compile(r'\b([A-Za-z_$][\w$]*)\s*=\s*function\(([^)]*)\)\{', re.S)
 
 
 def _safe_text(value):
     text = re.sub(r"https?://[^\s\"']+", "<URL>", str(value or ""))
     text = re.sub(r"[A-Za-z0-9_\-]{80,}", "<LONG_TOKEN>", text)
     text = re.sub(r"\s+", " ", text).strip()
-    return text[:420]
+    return text[:520]
 
 
 def _function_before(js_text, position):
-    prefix = (js_text or "")[max(0, position - 220):position]
-    match = _FUNC_RE.search(prefix)
-    if not match:
+    prefix = (js_text or "")[max(0, position - 520):position]
+    matches = list(_ASSIGN_FUNC_RE.finditer(prefix))
+    if not matches:
         return None, None
+    match = matches[-1]
     args = [item.strip() for item in match.group(2).split(",") if item.strip()]
     return match.group(1), (args[0] if len(args) == 1 else None)
+
+
+def _balanced_block(text, open_pos, open_char="{", close_char="}", limit=9000):
+    if open_pos < 0 or open_pos >= len(text) or text[open_pos] != open_char:
+        return None
+    depth = 0
+    quote = None
+    escaped = False
+    end = min(len(text), open_pos + limit)
+    for index in range(open_pos, end):
+        char = text[index]
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in ("'", '"', "`"):
+            quote = char
+            continue
+        if char == open_char:
+            depth += 1
+        elif char == close_char:
+            depth -= 1
+            if depth == 0:
+                return text[open_pos:index + 1]
+    return None
+
+
+def _function_body(text, function_name):
+    pattern = re.compile(r'\b' + re.escape(function_name) + r'\s*=\s*function\(([^)]*)\)\{', re.S)
+    match = pattern.search(text or "")
+    if not match:
+        return None, None
+    open_pos = match.end() - 1
+    block = _balanced_block(text, open_pos)
+    if not block:
+        return None, None
+    args = [item.strip() for item in match.group(1).split(",") if item.strip()]
+    return block[1:-1], (args[0] if len(args) == 1 else None)
 
 
 def _body_keys(body_expr, function_arg):
@@ -65,34 +109,87 @@ def _body_keys(body_expr, function_arg):
     return keys
 
 
-def extract_frontend_api_calls(js_text):
-    """Parse public minified bundle wrappers without executing JavaScript."""
-    text = js_text or ""
-    bases = {name: path for name, path in _BASE_RE.findall(text)}
+def _calls_in_text(text, forced_function=None, forced_arg=None):
+    bases = {name: path for name, path in _BASE_RE.findall(text or "")}
     calls = []
-    for match in _CALL_RE.finditer(text):
+    for match in _CALL_RE.finditer(text or ""):
         _client, method, base_var, suffix, body = match.groups()
         base = bases.get(base_var)
         if base != "/v1/share/h5":
             continue
-        function_name, function_arg = _function_before(text, match.start())
+        function_name, function_arg = (forced_function, forced_arg)
+        if not function_name:
+            function_name, function_arg = _function_before(text, match.start())
         if not function_name:
             continue
-        calls.append(
-            {
-                "function": function_name,
-                "arg": function_arg,
-                "method": method.upper(),
-                "route": base + suffix,
-                "body_keys": _body_keys(body, function_arg),
-                "body": _safe_text(body),
-            }
-        )
+        calls.append({
+            "function": function_name,
+            "arg": function_arg,
+            "method": method.upper(),
+            "route": base + suffix,
+            "body_keys": _body_keys(body, function_arg),
+            "body": _safe_text(body),
+        })
+    return calls
 
+
+def _resolve_exported_helper(text, symbol):
+    exports = dict(_EXPORT_RE.findall(text or ""))
+    function_name = exports.get(symbol)
+    if not function_name:
+        return None
+    body, function_arg = _function_body(text, function_name)
+    if body is None:
+        return {"function": function_name, "arg": function_arg, "exports": [symbol], "unresolved": True}
+
+    # The base constant is often declared outside the helper body, so prepend a
+    # small header containing all public /v1/share/h5 base assignments.
+    bases = "\n".join(
+        f'{name}="{path}";'
+        for name, path in _BASE_RE.findall(text or "")
+    )
+    calls = _calls_in_text(bases + "\n" + body, forced_function=function_name, forced_arg=function_arg)
+    for call in calls:
+        call["exports"] = [symbol]
+    if len(calls) == 1:
+        return calls[0]
+    if calls:
+        # Prefer a read-like video/post/media route when the helper contains
+        # auxiliary requests as well.
+        preferred = [call for call in calls if _read_only_candidate(call)]
+        if len(preferred) == 1:
+            return preferred[0]
+    return {
+        "function": function_name,
+        "arg": function_arg,
+        "exports": [symbol],
+        "unresolved": True,
+        "candidate_calls": calls,
+        "body_preview": _safe_text(body),
+    }
+
+
+def extract_frontend_api_calls(js_text):
+    """Parse public minified bundle wrappers without executing JavaScript."""
+    text = js_text or ""
+    calls = _calls_in_text(text)
     exports = dict(_EXPORT_RE.findall(text))
     for call in calls:
         symbols = [symbol for symbol, fn in exports.items() if fn == call["function"]]
         call["exports"] = symbols
+
+    # Resolve HP independently. The production Shopee bundle can place the
+    # webpack export table far away from the actual request expression, which
+    # made proximity-only parsing miss it.
+    hp = _resolve_exported_helper(text, "HP")
+    if hp and not hp.get("unresolved"):
+        signature = (hp.get("function"), hp.get("method"), hp.get("route"), tuple(hp.get("body_keys") or []))
+        existing = {
+            (c.get("function"), c.get("method"), c.get("route"), tuple(c.get("body_keys") or []))
+            for c in calls
+        }
+        if signature not in existing:
+            calls.append(hp)
     return calls
 
 
@@ -112,27 +209,44 @@ def _discovery_key(page_url):
 
 def _discover_from_public_bundles(html, page_url, headers):
     all_calls = []
+    hp_debug = []
     for script_url in _scripts_from_html(html, page_url):
         try:
             response = runtime.requests.get(script_url, timeout=15, headers=headers)
             if not response.ok:
                 continue
-            for call in extract_frontend_api_calls(response.text or ""):
+            text = response.text or ""
+            resolved_hp = _resolve_exported_helper(text, "HP")
+            if resolved_hp:
+                debug = dict(resolved_hp)
+                debug["bundle"] = urlparse(script_url).path.rsplit("/", 1)[-1][:120]
+                hp_debug.append(debug)
+            for call in extract_frontend_api_calls(text):
                 call = dict(call)
                 call["bundle"] = urlparse(script_url).path.rsplit("/", 1)[-1][:120]
-                if call not in all_calls:
+                key = (call.get("function"), call.get("method"), call.get("route"), tuple(call.get("body_keys") or []))
+                if not any(
+                    (item.get("function"), item.get("method"), item.get("route"), tuple(item.get("body_keys") or [])) == key
+                    for item in all_calls
+                ):
                     all_calls.append(call)
         except Exception as exc:
             print(f"[JetBot Shopee] frontend API bundle scan failed: {type(exc).__name__}")
 
-    # The share-video page calls g.HP(postId) before reading n.list[0].meta.
-    # Prefer the exact HP export; do not guess another helper when it is absent.
     hp = next((call for call in all_calls if "HP" in call.get("exports", [])), None)
     with _LOCK:
         _DISCOVERY[_discovery_key(page_url)] = hp
 
     print(f"[JetBot Shopee] frontend_api discovered_calls={len(all_calls)} hp_found={bool(hp)}")
-    for call in all_calls[:20]:
+    for debug in hp_debug[:4]:
+        if debug.get("unresolved"):
+            candidates = debug.get("candidate_calls") or []
+            print(
+                f"[JetBot Shopee] frontend_api HP unresolved function={debug.get('function','-')} "
+                f"arg={debug.get('arg') or '-'} candidate_calls={len(candidates)} "
+                f"bundle={debug.get('bundle','-')} body={debug.get('body_preview','-')}"
+            )
+    for call in all_calls[:24]:
         export_text = ",".join(call.get("exports") or []) or "-"
         keys = ",".join(call.get("body_keys") or []) or "-"
         print(
@@ -169,14 +283,13 @@ def _read_only_candidate(call):
     )
     if any(token in suffix for token in blocked):
         return False
-    return any(token in suffix for token in ("get", "video", "post", "media", "detail", "list"))
+    return any(token in suffix for token in ("get", "video", "post", "media", "detail", "list", "feed"))
 
 
 def _public_post_payload(call, share_id):
     keys = call.get("body_keys") or []
     if not keys:
         return None
-    # Only reconstruct keys clearly referring to the public post/id argument.
     accepted = [key for key in keys if "post" in key.lower() or key.lower() in {"id", "video_id", "videoid"}]
     if not accepted:
         return None
