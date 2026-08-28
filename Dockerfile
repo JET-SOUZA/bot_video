@@ -17,6 +17,7 @@ FROM python:3.11-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
     PORT=10000
 
 RUN apt-get update && \
@@ -33,6 +34,6 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY . /app
 RUN mkdir -p /app/downloads && chmod -R a+rw /app/downloads
 
-# O provider HTTP fica apenas no localhost:4416. O yt-dlp detecta esse provider
-# automaticamente; o web service do Telegram continua expondo somente PORT=10000.
+# O provider HTTP fica apenas no localhost:4416. O yt-dlp recebe explicitamente
+# esse endereço via sitecustomize.py; o Telegram continua em PORT=10000.
 CMD ["sh", "-c", "node /root/bgutil-ytdlp-pot-provider/server/build/main.js >/tmp/bgutil.log 2>&1 & exec python jetbot_v2.py"]
