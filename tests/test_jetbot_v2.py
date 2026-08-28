@@ -7,7 +7,6 @@ from unittest import mock
 
 os.environ.setdefault("TOKEN", "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi")
 
-# Garante que o hardening de runtime também é exercitado fora do Docker.
 import sitecustomize  # noqa: F401
 import jetbot_v2 as bot
 
@@ -73,10 +72,7 @@ class YoutubeMotorTests(unittest.TestCase):
         ydl = bot.yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True})
         args = ydl.params["extractor_args"]
         self.assertIn("mweb", args["youtube"]["player_client"])
-        self.assertEqual(
-            args["youtubepot-bgutilhttp"]["base_url"],
-            ["http://127.0.0.1:4416"],
-        )
+        self.assertEqual(args["youtubepot-bgutilhttp"]["base_url"], ["http://127.0.0.1:4416"])
 
 
 class FakeYDL:
@@ -103,9 +99,7 @@ class FakeYDL:
 
 class DownloadMockTests(unittest.TestCase):
     def test_general_download_flow_with_mock_ytdlp(self):
-        with tempfile.TemporaryDirectory() as td, \
-             mock.patch.object(bot, "DOWNLOADS_DIR", Path(td)), \
-             mock.patch.object(bot.yt_dlp, "YoutubeDL", FakeYDL):
+        with tempfile.TemporaryDirectory() as td, mock.patch.object(bot, "DOWNLOADS_DIR", Path(td)), mock.patch.object(bot.yt_dlp, "YoutubeDL", FakeYDL):
             result = bot.download_media("https://www.instagram.com/reel/abc/", 42)
             try:
                 self.assertEqual(result["platform"], "instagram")
@@ -114,9 +108,7 @@ class DownloadMockTests(unittest.TestCase):
                 shutil.rmtree(result["temp_dir"], ignore_errors=True)
 
     def test_youtube_blocking_engine_returns_mp3(self):
-        with tempfile.TemporaryDirectory() as td, \
-             mock.patch.object(bot, "DOWNLOAD_DIR", Path(td)), \
-             mock.patch.object(bot.yt_dlp, "YoutubeDL", FakeYDL):
+        with tempfile.TemporaryDirectory() as td, mock.patch.object(bot, "DOWNLOAD_DIR", Path(td)), mock.patch.object(bot.yt_dlp, "YoutubeDL", FakeYDL):
             path = bot.download_youtube_file_v2("https://youtu.be/abc", quality="mp3", to_mp3=True)
             try:
                 self.assertEqual(Path(path).suffix, ".mp3")
@@ -124,12 +116,14 @@ class DownloadMockTests(unittest.TestCase):
             finally:
                 Path(path).unlink(missing_ok=True)
 
-    def test_shopee_watermark_button_is_scoped(self):
-        markup = bot._watermark_keyboard("tok", "shopee")
-        self.assertIsNotNone(markup)
-        self.assertIn("Sem marca", markup.inline_keyboard[0][0].text)
-        self.assertEqual(markup.inline_keyboard[0][0].callback_data, "wm:tok")
-        self.assertIsNone(bot._watermark_keyboard("tok", "instagram"))
+    def test_shopee_prefers_original_source(self):
+        original = bot._rank_shopee_candidate("data.original_video_url", "https://cdn.example/original.mp4")
+        marked = bot._rank_shopee_candidate("data.play_watermark", "https://cdn.example/watermark.mp4")
+        self.assertGreater(original, marked)
+
+    def test_shopee_candidate_walker(self):
+        found = list(bot._iter_media_candidates({"data": {"original": "https://cdn.example/original.mp4"}}))
+        self.assertEqual(found[0][1], "https://cdn.example/original.mp4")
 
 
 class StartupAndDockerTests(unittest.TestCase):
@@ -137,7 +131,7 @@ class StartupAndDockerTests(unittest.TestCase):
         app = bot.build_application()
         self.assertIsNotNone(app)
         handler_count = sum(len(group) for group in app.handlers.values())
-        self.assertGreaterEqual(handler_count, 9)
+        self.assertGreaterEqual(handler_count, 8)
 
     def test_docker_runtime(self):
         root = Path(__file__).resolve().parents[1]
