@@ -129,7 +129,8 @@ class StartupAndDockerTests(unittest.TestCase):
         self.assertIn("node:20", docker)
         self.assertIn("bgutil-ytdlp-pot-provider", docker)
         self.assertIn("bgutil-ytdlp-pot-provider", requirements)
-        self.assertIn('CMD ["python", "jetbot_v2.py"]', docker)
+        self.assertIn("server/build/main.js", docker)
+        self.assertIn("exec python jetbot_v2.py", docker)
 
 
 if __name__ == "__main__":
