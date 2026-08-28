@@ -112,30 +112,65 @@ def _iter_next_payloads(html: str, share_id: str, headers: dict):
 
 
 def _extract_runtime_paths(js_text: str):
-    """Extrai rotas relacionadas a vídeo/post/share presentes nos bundles."""
+    """Extrai apenas rotas/URLs plausíveis ligadas a vídeo/share/media."""
     found = set()
-    for match in re.finditer(r'["\']([^"\']{4,260})["\']', js_text or ""):
-        value = match.group(1).replace("\\/", "/")
-        low = value.lower()
-        if not any(token in low for token in ("video", "share", "post", "media")):
-            continue
-        if not any(token in low for token in ("/api/", "api/", "/video", "/post", "/share", "media")):
-            continue
-        if "_next/static" in low or "node_modules" in low:
-            continue
-        if len(value) > 240:
-            continue
-        found.add(value)
+    patterns = (
+        r'["\'](https?://[^"\']{5,300})["\']',
+        r'["\']((?:/|api/)[A-Za-z0-9_./?=&:\-\[\]*]{4,220})["\']',
+    )
+    for pattern in patterns:
+        for match in re.finditer(pattern, js_text or "", re.I):
+            value = match.group(1).replace("\\/", "/")
+            low = value.lower()
+            if not any(token in low for token in ("video", "share", "post", "media")):
+                continue
+            if "_next/static" in low or "node_modules" in low:
+                continue
+            found.add(value)
     return sorted(found)
 
 
-def _inspect_shopee_runtime(html: str, page_url: str, headers: dict):
-    """Lê bundles públicos carregados pela página e registra rotas úteis.
+def _sanitize_js_context(value: str) -> str:
+    """Reduz contexto de bundle sem expor tokens, cookies ou URLs assinadas."""
+    text = re.sub(r"https?://[^\s\"']+", "<URL>", value or "")
+    text = re.sub(r"[A-Za-z0-9_\-]{80,}", "<LONG_TOKEN>", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:420]
 
-    Não chama rotas descobertas automaticamente; apenas registra strings de
-    endpoint para que possamos identificar a API usada pelo front sem vazar
-    URLs assinadas de mídia ou cookies.
-    """
+
+def _extract_request_contexts(js_text: str):
+    """Encontra chamadas de rede e trechos em torno das rotas mais relevantes."""
+    text = js_text or ""
+    contexts = []
+    needles = (
+        "/v1/share/h5",
+        "/share-video/",
+        "shareVideoId",
+        "postId",
+        "watermarkVideoUrl",
+        "videoUrl",
+        "originalVideo",
+        "mediaInfo",
+    )
+    for needle in needles:
+        start = 0
+        while True:
+            idx = text.find(needle, start)
+            if idx < 0:
+                break
+            left = max(0, idx - 260)
+            right = min(len(text), idx + len(needle) + 420)
+            snippet = _sanitize_js_context(text[left:right])
+            if snippet and snippet not in contexts:
+                contexts.append(snippet)
+            if len(contexts) >= 18:
+                return contexts
+            start = idx + len(needle)
+    return contexts
+
+
+def _inspect_shopee_runtime(html: str, page_url: str, headers: dict):
+    """Lê bundles públicos e registra somente pistas úteis do fluxo de rede."""
     if not html:
         return []
     scripts = []
@@ -147,6 +182,7 @@ def _inspect_shopee_runtime(html: str, page_url: str, headers: dict):
     scripts = list(dict.fromkeys(scripts))[:16]
 
     endpoints = set()
+    contexts = []
     for script_url in scripts:
         try:
             response = requests.get(script_url, timeout=15, headers=headers)
@@ -155,21 +191,29 @@ def _inspect_shopee_runtime(html: str, page_url: str, headers: dict):
             text = response.text or ""
             for item in _extract_runtime_paths(text):
                 endpoints.add(item)
+            for item in _extract_request_contexts(text):
+                if item not in contexts:
+                    contexts.append(item)
         except Exception as exc:
             print(f"[JetBot Shopee] bundle fetch failed: {type(exc).__name__}: {exc}")
 
     ranked = sorted(
         endpoints,
         key=lambda value: (
-            "original" not in value.lower() and "master" not in value.lower(),
+            "/v1/share/h5" not in value.lower(),
             "video" not in value.lower(),
+            "share" not in value.lower(),
             len(value),
         ),
-    )[:30]
-    print(f"[JetBot Shopee] runtime bundles={len(scripts)} endpoint_candidates={len(ranked)}")
+    )[:24]
+    print(
+        f"[JetBot Shopee] runtime bundles={len(scripts)} "
+        f"endpoint_candidates={len(ranked)} request_contexts={len(contexts)}"
+    )
     for endpoint in ranked:
-        safe = endpoint.replace("\n", " ")[:240]
-        print(f"[JetBot Shopee] runtime_endpoint={safe}")
+        print(f"[JetBot Shopee] runtime_endpoint={endpoint[:240]}")
+    for idx, context in enumerate(contexts[:18], 1):
+        print(f"[JetBot Shopee] request_context_{idx}={context}")
     return ranked
 
 
@@ -259,7 +303,6 @@ def strict_extract_shopee_original(url: str):
         if current is None:
             unique[candidate] = (score, marked, trusted, path)
         else:
-            # Nunca deixa uma aparição sem rótulo apagar a origem watermark.
             best_score = max(current[0], score)
             any_marked = current[1] or marked
             any_trusted = (current[2] or trusted) and not any_marked
@@ -291,8 +334,6 @@ def strict_extract_shopee_original(url: str):
         print("[JetBot Shopee] clean source selected from configured extractor")
         return external
 
-    # Última etapa de diagnóstico antes de falhar: descobrir as rotas reais
-    # embutidas nos bundles atuais da página Shopee Video.
     _inspect_shopee_runtime(html, resolved, headers)
 
     print(
