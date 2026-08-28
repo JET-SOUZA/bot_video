@@ -40,7 +40,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY . /app
 RUN mkdir -p /app/downloads && chmod -R a+rw /app/downloads
 
-# Inicializa o servidor local de PO Token e depois a V2. O patch estruturado
-# da Shopee só promove video.url quando há watermarkVideoUrl distinto no mesmo
-# objeto, mantendo o bloqueio estrito contra mídia marcada.
-CMD ["sh", "-c", "node /root/bgutil-ytdlp-pot-provider/server/build/main.js 2>&1 & exec python -c \"import sitecustomize, shopee_structured_patch, runpy; runpy.run_path('/app/run_v2.py', run_name='__main__')\""]
+# A V2 tenta a fonte original da Shopee primeiro. Quando ela não estiver
+# disponível, usa a melhor mídia reproduzível encontrada em vez de bloquear o
+# download. Covers e thumbnails continuam excluídos do fallback.
+CMD ["sh", "-c", "node /root/bgutil-ytdlp-pot-provider/server/build/main.js 2>&1 & exec python -c \"import sitecustomize, shopee_structured_patch, runpy; runpy.run_path('/app/run_v2_fallback.py', run_name='__main__')\""]
