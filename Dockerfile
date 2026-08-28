@@ -34,6 +34,6 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY . /app
 RUN mkdir -p /app/downloads && chmod -R a+rw /app/downloads
 
-# O provider HTTP fica apenas no localhost:4416. O yt-dlp recebe explicitamente
-# esse endereço via sitecustomize.py; o Telegram continua em PORT=10000.
-CMD ["sh", "-c", "node /root/bgutil-ytdlp-pot-provider/server/build/main.js >/tmp/bgutil.log 2>&1 & exec python jetbot_v2.py"]
+# Inicializa explicitamente o runtime patch antes de executar a V2. O log do
+# provider fica no stdout para facilitar diagnóstico no Render.
+CMD ["sh", "-c", "node /root/bgutil-ytdlp-pot-provider/server/build/main.js 2>&1 & exec python -c \"import sitecustomize, runpy; runpy.run_path('/app/jetbot_v2.py', run_name='__main__')\""]
