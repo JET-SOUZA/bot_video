@@ -40,5 +40,6 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY . /app
 RUN mkdir -p /app/downloads && chmod -R a+rw /app/downloads
 
-# Inicializa o servidor local de PO Token e depois a V2.
-CMD ["sh", "-c", "node /root/bgutil-ytdlp-pot-provider/server/build/main.js 2>&1 & exec python -c \"import sitecustomize, runpy; runpy.run_path('/app/jetbot_v2.py', run_name='__main__')\""]
+# Inicializa o servidor local de PO Token e depois a V2 com a política
+# estrita de fonte limpa para Shopee Video.
+CMD ["sh", "-c", "node /root/bgutil-ytdlp-pot-provider/server/build/main.js 2>&1 & exec python -c \"import sitecustomize, runpy; runpy.run_path('/app/run_v2.py', run_name='__main__')\""]
