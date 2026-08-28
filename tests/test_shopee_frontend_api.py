@@ -21,6 +21,24 @@ class ShopeeFrontendApiTests(unittest.TestCase):
         self.assertEqual(calls[0]["body_keys"], ["postId"])
         self.assertIn("HP", calls[0]["exports"])
 
+    def test_resolves_hp_when_export_table_is_far_from_request(self):
+        filler = 'x=' + ('"noise";' * 100)
+        js = (
+            'n.d(t,{nE:function(){return getUserDetail},HP:function(){return loadPost},k2:function(){return getVideoByHashtag}});'
+            + filler +
+            'var s="/v1/share/h5",getUserDetail=function(e){return a.Z.post('
+            '"".concat(s,"/get_user_detail"),{user_id:e}).then(function(e){return e.data})},'
+            'loadPost=function(e){var q={scene:"share"};return a.Z.post('
+            '"".concat(s,"/get_video_detail"),{postId:e,extra:q}).then(function(e){return e.data})},'
+            'getVideoByHashtag=function(e){return a.Z.post('
+            '"".concat(s,"/get_video_by_hash_tag"),{hashtag_id:e}).then(function(e){return e.data})};'
+        )
+        calls = api.extract_frontend_api_calls(js)
+        hp = next(call for call in calls if "HP" in call.get("exports", []))
+        self.assertEqual(hp["function"], "loadPost")
+        self.assertEqual(hp["route"], "/v1/share/h5/get_video_detail")
+        self.assertEqual(hp["body_keys"], ["postId"])
+
     def test_read_probe_rejects_mutation_route(self):
         call = {
             "method": "POST",
