@@ -29,11 +29,22 @@ class ShopeeRuntimeTests(unittest.TestCase):
         self.assertIn("/api/v4/video/post/detail", found)
         self.assertNotIn("/_next/static/chunks/main.js", found)
 
+    def test_request_contexts_capture_share_route_without_exposing_signed_url(self):
+        js = (
+            'function x(e){return fetch("/v1/share/h5",{method:"POST",body:JSON.stringify({postId:e})})};'
+            'const media="https://cdn.example.com/path/video.mp4?signature=' + ('A' * 120) + '";'
+        )
+        contexts = runtime._extract_request_contexts(js)
+        joined = " ".join(contexts)
+        self.assertIn("/v1/share/h5", joined)
+        self.assertIn("postId", joined)
+        self.assertNotIn("https://cdn.example.com", joined)
+
     def test_runtime_inspection_fetches_public_next_bundles(self):
         html = '<script src="/share-web/_next/static/chunks/pages/share-video/test.js"></script>'
         fake = mock.Mock()
         fake.ok = True
-        fake.text = 'x="/api/v4/video/post/detail";'
+        fake.text = 'x="/api/v4/video/post/detail";fetch("/v1/share/h5",{body:JSON.stringify({postId:e})});'
         with mock.patch.object(runtime.requests, "get", return_value=fake) as get:
             found = runtime._inspect_shopee_runtime(html, "https://sv.shopee.com.br/share-video/abc", {})
         self.assertIn("/api/v4/video/post/detail", found)
