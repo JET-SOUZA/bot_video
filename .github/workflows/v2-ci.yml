@@ -43,7 +43,7 @@ jobs:
           docker run --rm --entrypoint sh jetbot-v2-ci -c
           'node /root/bgutil-ytdlp-pot-provider/server/build/main.js >/tmp/bgutil.log 2>&1 & pid=$!; i=0; until curl -fsS http://127.0.0.1:4416/ping; do i=$((i+1)); [ $i -lt 50 ] || { cat /tmp/bgutil.log; exit 1; }; sleep .2; done; kill $pid; wait $pid 2>/dev/null || true; cat /tmp/bgutil.log'
       - name: Verify final V2 runtime patch order
-        run: docker run --rm --entrypoint python -e TOKEN='123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi' jetbot-v2-ci -c "import bootstrap_v2; bootstrap_v2._verify_runtime(); print('bootstrap-order-ok')"
+        run: docker run --rm --entrypoint python -e TOKEN='123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi' jetbot-v2-ci -c "import bootstrap_v2; bootstrap_v2._apply_runtime(); bootstrap_v2._verify_runtime(); print('bootstrap-order-ok')"
       - name: Real FFmpeg geometry and audio fidelity
         run: docker run --rm --entrypoint python -e TOKEN='123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi' jetbot-v2-ci -m unittest tests.test_media_real_ffmpeg -v
       - name: Import V2 inside Docker
