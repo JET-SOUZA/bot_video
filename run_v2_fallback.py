@@ -1,10 +1,15 @@
-"""JetBot V2 entrypoint with a practical Shopee fallback.
+"""JetBot V2 Shopee policy layer.
 
-The clean/original resolver still runs first. If Shopee exposes only a playable
-watermarked rendition, the bot downloads that media instead of blocking the
-request. Covers/thumbnails are never selected as video fallbacks.
+The clean/original resolver always runs first. A public watermarked rendition may
+still be used as a fallback because the bot owner explicitly prefers a working
+download over a hard block, but that fallback is now explicit in result metadata
+instead of being mislabeled as a clean/original source.
+
+Set SHOPEE_ALLOW_MARKED_FALLBACK=0 to enforce clean-only behavior in production.
 """
 
+import contextvars
+import os
 import re
 from pathlib import Path
 from urllib.parse import urlparse
@@ -13,6 +18,10 @@ import run_v2 as runtime
 
 
 _ORIGINAL_EXTRACT = runtime.strict_extract_shopee_original
+_ALLOW_MARKED_FALLBACK = os.getenv("SHOPEE_ALLOW_MARKED_FALLBACK", "1").strip().lower() in {
+    "1", "true", "yes", "on"
+}
+_SOURCE_KIND = contextvars.ContextVar("jetbot_shopee_source_kind", default=None)
 
 
 def _normalize_media_url(value):
@@ -133,35 +142,60 @@ def _fallback_shopee_media(url):
 
 
 def extract_shopee_prefer_original(url):
+    _SOURCE_KIND.set(None)
     clean = _ORIGINAL_EXTRACT(url)
     if clean:
+        _SOURCE_KIND.set("clean")
+        print("[JetBot Shopee] source_kind=clean")
         return clean
+
+    if not _ALLOW_MARKED_FALLBACK:
+        print("[JetBot Shopee] original unavailable; marked fallback disabled by policy")
+        return None
 
     fallback = _fallback_shopee_media(url)
     if fallback:
-        print("[JetBot Shopee] original unavailable; using playable Shopee fallback")
+        _SOURCE_KIND.set("marked")
+        print("[JetBot Shopee] source_kind=marked_fallback")
         return fallback
 
     print("[JetBot Shopee] no playable Shopee media source found")
     return None
 
 
-# strict_download_media resolves this global at call time, so replacing the
-# resolver is enough to remove the old "clean source only" block while keeping
-# all other V2 download behavior intact.
+def download_media_with_shopee_policy(url, uid):
+    """Run the strict downloader and attach truthful Shopee source metadata."""
+    token = _SOURCE_KIND.set(None)
+    try:
+        result = runtime.strict_download_media(url, uid)
+        if runtime.app.detect_platform(url) != "shopee" or not isinstance(result, dict):
+            return result
+        kind = _SOURCE_KIND.get()
+        result = dict(result)
+        if kind == "marked":
+            result["source"] = "shopee-marked-fallback"
+            result["watermarked"] = True
+        elif kind == "clean":
+            result["source"] = "shopee-clean"
+            result["watermarked"] = False
+        else:
+            result["source"] = "shopee-unknown"
+        return result
+    finally:
+        _SOURCE_KIND.reset(token)
+
+
 runtime.strict_extract_shopee_original = extract_shopee_prefer_original
 runtime.app._extract_shopee_original_url = extract_shopee_prefer_original
-runtime.app.download_media = runtime.strict_download_media
+runtime.app.download_media = download_media_with_shopee_policy
 
-# telegram_fit_patch is imported before this entrypoint by Docker. The Shopee
-# runtime assignment above used to overwrite that wrapper, which is why X files
-# over 49 MB were still rejected before compression. Re-bind the fit wrapper to
-# the final strict downloader so every non-YouTube result is size-checked.
+# Keep Telegram size fitting as the final media wrapper. This prevents a later
+# Shopee assignment from bypassing the >49 MB protection used by X/Twitter.
 try:
     import telegram_fit_patch as _telegram_fit
-    _telegram_fit._ORIGINAL_DOWNLOAD_MEDIA = runtime.strict_download_media
+    _telegram_fit._ORIGINAL_DOWNLOAD_MEDIA = download_media_with_shopee_policy
     runtime.app.download_media = _telegram_fit.download_media_with_telegram_fit
-    print("[JetBot Media] Telegram size-fit wrapper re-applied after Shopee runtime")
+    print("[JetBot Media] Telegram size-fit wrapper re-applied after Shopee policy")
 except Exception as exc:
     print(f"[JetBot Media] Telegram size-fit reapply failed: {type(exc).__name__}: {exc}")
 
