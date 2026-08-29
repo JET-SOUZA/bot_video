@@ -1,8 +1,9 @@
 """Single JetBot V2 bootstrap.
 
 Centralizes runtime patch order so Docker no longer owns a fragile chain of ten
-inline imports. The final assertions make accidental wrapper overwrites fail at
-startup instead of silently changing production behavior.
+inline imports. Runtime mutation happens explicitly here, and final assertions
+make accidental wrapper overwrites fail at startup instead of silently changing
+production behavior.
 """
 
 import os
@@ -23,6 +24,10 @@ import shopee_diag_telegram_patch  # noqa: F401,E402
 import run_v2_fallback as entry  # noqa: E402
 
 
+def _apply_runtime():
+    entry.apply_runtime_policy()
+
+
 def _verify_runtime():
     app = entry.runtime.app
     if app.download_media is not telegram_fit_patch.download_media_with_telegram_fit:
@@ -31,10 +36,13 @@ def _verify_runtime():
         raise RuntimeError("JetBot V2 bootstrap: Shopee policy is not directly under Telegram size-fit")
     if app.download_youtube_file_v2 is not youtube_auth_patch.download_youtube_file_guarded:
         raise RuntimeError("JetBot V2 bootstrap: YouTube auth guard was overwritten")
+    if not entry._RUNTIME_APPLIED:
+        raise RuntimeError("JetBot V2 bootstrap: explicit runtime policy was not applied")
     print("[JetBot V2] bootstrap runtime order verified")
 
 
 def main():
+    _apply_runtime()
     _verify_runtime()
     entry.runtime.app.main()
 
