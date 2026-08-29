@@ -7,7 +7,13 @@ os.environ.setdefault("TOKEN", "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi")
 import run_v2 as runtime
 
 
-class ShopeeRuntimeTests(unittest.TestCase):
+class ShopeeStrictResolverTests(unittest.TestCase):
+    """The strict clean-source layer must never classify marked media as clean.
+
+    Whether a marked rendition may be delivered as a visibly labeled fallback is
+    a separate policy tested in test_shopee_fallback_runtime.py.
+    """
+
     def test_watermark_field_is_rejected_even_with_opaque_url(self):
         url = "https://down-ws-br.vod.susercontent.com/api/v4/111/mms/file.mp4"
         self.assertTrue(runtime._marked_candidate("pageProps.mediaInfo.video.watermarkVideoUrl", url))
@@ -48,12 +54,9 @@ class ShopeeRuntimeTests(unittest.TestCase):
         with mock.patch.object(runtime.requests, "get", return_value=fake) as get:
             found = runtime._inspect_shopee_runtime(html, "https://sv.shopee.com.br/share-video/abc", {})
         self.assertIn("/api/v4/video/post/detail", found)
-        # The base inspector needs one request. Optional diagnostics such as the
-        # public source-map probe may legitimately add requests for the same
-        # static frontend asset and its .map file.
         self.assertGreaterEqual(get.call_count, 1)
 
-    def test_shopee_download_never_falls_back_when_clean_source_missing(self):
+    def test_strict_layer_raises_when_clean_source_missing(self):
         with mock.patch.object(runtime.app, "detect_platform", return_value="shopee"), \
              mock.patch.object(runtime, "strict_extract_shopee_original", return_value=None), \
              mock.patch.object(runtime.app, "_temporary_cookiefile", return_value=None), \
