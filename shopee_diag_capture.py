@@ -1,18 +1,18 @@
-"""Temporary staging helper: capture only sanitized JetBot Shopee diagnostics.
+"""Optional staging helper for sanitized Shopee diagnostics.
 
-This module mirrors stdout normally and keeps a small in-memory buffer of lines
-that start with ``[JetBot Shopee]``. It never captures unrelated application
-logs. Long opaque tokens and raw URLs are redacted again as a defense-in-depth
-measure before the text is exposed to the Telegram staging tester.
+Diagnostics are disabled unless SHOPEE_DIAGNOSTICS=1. When enabled, capture is
+request-local via ContextVar so simultaneous users cannot receive each other's
+Shopee diagnostic lines. asyncio.to_thread copies the current context, so the
+capture follows the download worker without relying on a process-global buffer.
 """
 
 import builtins
+import contextvars
+import os
 import re
-import threading
-from collections import deque
 
-_LOCK = threading.Lock()
-_LINES = deque(maxlen=240)
+_ENABLED = os.getenv("SHOPEE_DIAGNOSTICS", "0").strip().lower() in {"1", "true", "yes", "on"}
+_CURRENT_LINES = contextvars.ContextVar("jetbot_shopee_diag_lines", default=None)
 _ORIGINAL_PRINT = builtins.print
 
 
@@ -23,27 +23,38 @@ def _sanitize(value: str) -> str:
     return text[:700]
 
 
+def begin_shopee_diagnostics():
+    """Start an isolated capture for the current request/context."""
+    if not _ENABLED:
+        return None
+    return _CURRENT_LINES.set([])
+
+
+def end_shopee_diagnostics(token) -> str:
+    """Return the current request's diagnostics and restore the prior context."""
+    if not _ENABLED or token is None:
+        return ""
+    lines = _CURRENT_LINES.get() or []
+    try:
+        _CURRENT_LINES.reset(token)
+    except Exception:
+        _CURRENT_LINES.set(None)
+    return ("\n".join(lines) + "\n") if lines else ""
+
+
 def _capture_print(*args, **kwargs):
     try:
         rendered = " ".join(str(arg) for arg in args)
-        if rendered.startswith("[JetBot Shopee]"):
-            with _LOCK:
-                _LINES.append(_sanitize(rendered))
+        lines = _CURRENT_LINES.get()
+        if lines is not None and rendered.startswith("[JetBot Shopee]"):
+            if len(lines) < 240:
+                lines.append(_sanitize(rendered))
     except Exception:
         pass
     return _ORIGINAL_PRINT(*args, **kwargs)
 
 
-def pop_shopee_diagnostics() -> str:
-    """Return and clear the currently buffered Shopee-only diagnostic lines."""
-    with _LOCK:
-        if not _LINES:
-            return ""
-        text = "\n".join(_LINES)
-        _LINES.clear()
-    return text + "\n"
-
-
-if not getattr(builtins, "_jetbot_shopee_diag_capture", False):
+if _ENABLED and not getattr(builtins, "_jetbot_shopee_diag_capture", False):
     builtins.print = _capture_print
     builtins._jetbot_shopee_diag_capture = True
+    _ORIGINAL_PRINT("[JetBot Shopee] request-isolated diagnostic capture enabled")
