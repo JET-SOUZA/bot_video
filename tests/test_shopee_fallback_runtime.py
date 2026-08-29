@@ -6,7 +6,7 @@ os.environ.setdefault("TOKEN", "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi")
 import run_v2_fallback as fallback
 
 
-def test_marked_mp4_can_be_used_as_playable_fallback():
+def test_marked_mp4_can_be_used_as_explicit_playable_fallback():
     marked = "https://down-ws-br.vod.susercontent.com/api/v4/file.mp4"
     selected = fallback._select_playable_candidate(
         [("pageProps.mediaInfo.video.watermarkVideoUrl", marked)]
@@ -27,11 +27,22 @@ def test_original_is_still_preferred_before_fallback():
     with mock.patch.object(fallback, "_ORIGINAL_EXTRACT", return_value=clean), \
          mock.patch.object(fallback, "_fallback_shopee_media") as fallback_media:
         assert fallback.extract_shopee_prefer_original("https://br.shp.ee/test") == clean
+    assert fallback._SOURCE_KIND.get() == "clean"
     fallback_media.assert_not_called()
 
 
-def test_playable_media_is_returned_when_original_is_missing():
+def test_marked_fallback_is_labeled_and_not_misrepresented_as_clean():
     marked = "https://cdn.example.com/marked.mp4"
+
+    def fake_strict(url, uid):
+        assert fallback.extract_shopee_prefer_original(url) == marked
+        return {"path": "/tmp/video.mp4", "source": "shopee-clean-strict"}
+
     with mock.patch.object(fallback, "_ORIGINAL_EXTRACT", return_value=None), \
-         mock.patch.object(fallback, "_fallback_shopee_media", return_value=marked):
-        assert fallback.extract_shopee_prefer_original("https://br.shp.ee/test") == marked
+         mock.patch.object(fallback, "_fallback_shopee_media", return_value=marked), \
+         mock.patch.object(fallback.runtime, "strict_download_media", side_effect=fake_strict), \
+         mock.patch.object(fallback.runtime.app, "detect_platform", return_value="shopee"):
+        result = fallback.download_media_with_shopee_policy("https://br.shp.ee/test", 1)
+
+    assert result["source"] == "shopee-marked-fallback"
+    assert result["watermarked"] is True
