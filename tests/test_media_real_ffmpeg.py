@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -49,6 +50,7 @@ def _make_fixture(path: Path, width: int, height: int):
             fh.write(b"\0" * (minimum - path.stat().st_size))
 
 
+@unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg/ffprobe unavailable")
 class RealMediaFidelityTests(unittest.TestCase):
     def test_oversized_video_preserves_geometry_and_audio_for_common_ratios(self):
         cases = [(360, 640), (480, 480), (640, 360)]  # 9:16, 1:1, 16:9
