@@ -32,15 +32,23 @@ def _retryable_youtube_error(exc):
         "requested format is not available",
         "no video formats found",
         "the page needs to be reloaded",
+        "failed to extract any player response",
     )
     return any(marker in text for marker in markers)
+
+
+def _has_cookie_auth(params):
+    return bool((params or {}).get("cookiefile") or (params or {}).get("cookiesfrombrowser"))
 
 
 def _with_strategy(params, client, *, skip_webpage=False, force_pot=False, allow_missing_pot=False):
     opts = copy.deepcopy(params)
     extractor_args = copy.deepcopy(opts.get("extractor_args") or {})
     youtube_args = dict(extractor_args.get("youtube") or {})
-    youtube_args["player_client"] = [client]
+    if isinstance(client, (list, tuple)):
+        youtube_args["player_client"] = list(client)
+    else:
+        youtube_args["player_client"] = [client]
     if skip_webpage:
         youtube_args["player_skip"] = ["webpage"]
     else:
@@ -72,6 +80,16 @@ def _with_strategy(params, client, *, skip_webpage=False, force_pot=False, allow
 
 
 def _strategy_chain(base):
+    # As of Aug/2026 yt-dlp's default logged-in client (tv_downgraded) can
+    # return "The page needs to be reloaded" for valid cookies. Upstream
+    # recommends forcing default + web_embedded for cookie-authenticated use.
+    # Avoid clients that explicitly do not support account cookies.
+    if _has_cookie_auth(base):
+        return (
+            ("auth-default-web-embedded", _with_strategy(base, ("default", "web_embedded"), force_pot=False)),
+            ("auth-web-pot", _with_strategy(base, ("web", "web_embedded"), force_pot=True, allow_missing_pot=True)),
+            ("auth-web-creator-pot", _with_strategy(base, "web_creator", force_pot=True, allow_missing_pot=True)),
+        )
     return (
         ("web-safari", _with_strategy(base, "web_safari", force_pot=False)),
         ("mweb-pot", _with_strategy(base, "mweb", force_pot=True, allow_missing_pot=True)),
@@ -82,6 +100,12 @@ def _strategy_chain(base):
     )
 
 
+def _initial_strategy(base):
+    if _has_cookie_auth(base):
+        return _with_strategy(base, ("default", "web_embedded"), force_pot=False)
+    return _with_strategy(base, "web_safari", force_pot=False)
+
+
 if yt_dlp is not None and not getattr(yt_dlp, "_jetbot_runtime_patched", False):
     _OriginalYoutubeDL = yt_dlp.YoutubeDL
 
@@ -89,8 +113,7 @@ if yt_dlp is not None and not getattr(yt_dlp, "_jetbot_runtime_patched", False):
         def __init__(self, params=None, auto_init=True):
             base = dict(params or {})
             self._jetbot_base_params = copy.deepcopy(base)
-            first = _with_strategy(base, "web_safari", force_pot=False)
-            super().__init__(first, auto_init=auto_init)
+            super().__init__(_initial_strategy(base), auto_init=auto_init)
 
         def extract_info(self, url, *args, **kwargs):
             try:
@@ -98,7 +121,8 @@ if yt_dlp is not None and not getattr(yt_dlp, "_jetbot_runtime_patched", False):
             except Exception as first_exc:
                 if not _youtube_url(url) or not _retryable_youtube_error(first_exc):
                     raise
-                print("[JetBot YT] YouTube extraction blocked/failed; starting fallback chain...")
+                mode = "authenticated" if _has_cookie_auth(self._jetbot_base_params) else "anonymous"
+                print(f"[JetBot YT] YouTube extraction blocked/failed; starting {mode} fallback chain...")
                 last_exc = first_exc
                 for label, retry_opts in _strategy_chain(self._jetbot_base_params):
                     print(f"[JetBot YT] retry={label}")
@@ -114,4 +138,4 @@ if yt_dlp is not None and not getattr(yt_dlp, "_jetbot_runtime_patched", False):
 
     yt_dlp.YoutubeDL = JetBotYoutubeDL
     yt_dlp._jetbot_runtime_patched = True
-    print("[JetBot YT] runtime patch loaded (web_safari + BgUtils PO-token fallbacks)")
+    print("[JetBot YT] runtime patch loaded (cookie-aware clients + BgUtils PO-token fallbacks)")
