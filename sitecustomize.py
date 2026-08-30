@@ -41,6 +41,20 @@ def _has_cookie_auth(params):
     return bool((params or {}).get("cookiefile") or (params or {}).get("cookiesfrombrowser"))
 
 
+def _without_cookie_auth(params):
+    """Build an anonymous retry without discarding the requested output.
+
+    Some public videos expose formats through clients that deliberately do not
+    support account cookies (notably android_vr).  A configured cookie file
+    previously prevented JetBot from ever trying those clients, even after all
+    authenticated clients returned an empty format list.
+    """
+    opts = copy.deepcopy(params)
+    opts.pop("cookiefile", None)
+    opts.pop("cookiesfrombrowser", None)
+    return opts
+
+
 def _with_strategy(params, client, *, skip_webpage=False, force_pot=False, allow_missing_pot=False):
     opts = copy.deepcopy(params)
     extractor_args = copy.deepcopy(opts.get("extractor_args") or {})
@@ -100,6 +114,12 @@ def _strategy_chain(base):
     # recommends forcing default + web_embedded for cookie-authenticated use.
     # Avoid clients that explicitly do not support account cookies.
     if _has_cookie_auth(base):
+        anonymous_android_vr = _with_strategy(
+            _without_cookie_auth(base),
+            "android_vr",
+            force_pot=True,
+            allow_missing_pot=True,
+        )
         any_available = _with_strategy(
             _with_any_available_format(base),
             ("web", "web_embedded"),
@@ -107,6 +127,9 @@ def _strategy_chain(base):
             allow_missing_pot=True,
         )
         return (
+            # Public videos often work here even when an authenticated web
+            # session is challenged by YouTube's datacenter-IP checks.
+            ("anonymous-android-vr", anonymous_android_vr),
             ("auth-default-web-embedded", _with_strategy(base, ("default", "web_embedded"), force_pot=False)),
             ("auth-web-pot", _with_strategy(base, ("web", "web_embedded"), force_pot=True, allow_missing_pot=True)),
             ("auth-web-creator-pot", _with_strategy(base, "web_creator", force_pot=True, allow_missing_pot=True)),

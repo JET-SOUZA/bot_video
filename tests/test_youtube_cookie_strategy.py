@@ -20,15 +20,22 @@ class YouTubeCookieStrategyTests(unittest.TestCase):
         clients = initial["extractor_args"]["youtube"]["player_client"]
         self.assertEqual(clients, ["default", "web_embedded"])
 
-    def test_authenticated_chain_avoids_cookie_incompatible_clients(self):
+    def test_authenticated_chain_retries_public_video_without_cookies(self):
         chain = mod._strategy_chain({"cookiefile": "/tmp/youtube.cookies.txt"})
         labels = [label for label, _ in chain]
         joined = " ".join(labels)
+        self.assertEqual(labels[0], "anonymous-android-vr")
         self.assertIn("auth-default-web-embedded", labels)
         self.assertIn("auth-any-available", labels)
         self.assertNotIn("mweb", joined)
-        self.assertNotIn("android-vr", joined)
         self.assertNotIn("tv", joined)
+        public_retry = dict(chain)["anonymous-android-vr"]
+        self.assertNotIn("cookiefile", public_retry)
+        self.assertNotIn("cookiesfrombrowser", public_retry)
+        self.assertEqual(
+            public_retry["extractor_args"]["youtube"]["player_client"],
+            ["android_vr"],
+        )
 
     def test_final_authenticated_retry_relaxes_unavailable_video_format(self):
         base = {

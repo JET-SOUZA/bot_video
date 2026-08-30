@@ -440,6 +440,10 @@ def build_youtube_ydl_options(output_dir: Path, prefix: str, quality: str, to_mp
     opts = {
         "outtmpl": str(output_dir / f"{prefix}-%(id)s.%(ext)s"),
         "noplaylist": True,
+        # A playlist-only URL cannot be converted to a single-video URL by
+        # noplaylist.  The Telegram flow returns one file, so cap it explicitly
+        # to the first item instead of downloading an unbounded playlist.
+        "playlist_items": "1",
         "quiet": True,
         "no_warnings": True,
         "restrictfilenames": True,

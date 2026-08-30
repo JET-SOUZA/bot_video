@@ -61,6 +61,7 @@ class YoutubeMotorTests(unittest.TestCase):
         opts = bot.build_youtube_ydl_options(Path("/tmp"), "test", "1080", False)
         self.assertIn("height<=1080", opts["format"])
         self.assertEqual(opts["merge_output_format"], "mp4")
+        self.assertEqual(opts["playlist_items"], "1")
 
     def test_mp3_options_use_ffmpeg(self):
         opts = bot.build_youtube_ydl_options(Path("/tmp"), "test", "360", True)
