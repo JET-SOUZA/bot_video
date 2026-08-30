@@ -8,6 +8,10 @@ import run_v2 as runtime
 
 
 class ShopeeStrictResolverTests(unittest.TestCase):
+    def test_share_id_keeps_url_encoded_base64_padding(self):
+        url = "https://sv.shopee.com.br/share-video/OSTRerv4CACv-DYYAAAAAA%3D%3D?c=share_web"
+        self.assertEqual(runtime._extract_shopee_share_id(url), "OSTRerv4CACv-DYYAAAAAA==")
+
     """The strict clean-source layer must never classify marked media as clean.
 
     Whether a marked rendition may be delivered as a visibly labeled fallback is

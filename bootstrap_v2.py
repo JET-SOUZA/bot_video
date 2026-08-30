@@ -36,9 +36,13 @@ def _verify_runtime():
         raise RuntimeError("JetBot V2 bootstrap: Shopee policy is not directly under Telegram size-fit")
     if app.download_youtube_file_v2 is not youtube_auth_patch.download_youtube_file_guarded:
         raise RuntimeError("JetBot V2 bootstrap: YouTube auth guard was overwritten")
+    if entry._ALLOW_MARKED_FALLBACK:
+        raise RuntimeError("JetBot V2 bootstrap: marked Shopee fallback must stay disabled")
     if not entry._RUNTIME_APPLIED:
         raise RuntimeError("JetBot V2 bootstrap: explicit runtime policy was not applied")
-    print("[JetBot V2] bootstrap runtime order verified")
+    cookie_state = youtube_auth_patch._cookie_session_state()
+    print(f"[JetBot YT] cookie_session={cookie_state} (values are never logged)")
+    print("[JetBot V2] bootstrap runtime order verified; Shopee clean-only policy active")
 
 
 def main():

@@ -1,11 +1,16 @@
 import importlib.util
+import os
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 _SPEC = importlib.util.spec_from_file_location("jetbot_sitecustomize_test", Path(__file__).resolve().parents[1] / "sitecustomize.py")
 mod = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(mod)
+
+os.environ.setdefault("TOKEN", "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi")
+import youtube_auth_patch as auth
 
 
 class YouTubeCookieStrategyTests(unittest.TestCase):
@@ -26,6 +31,22 @@ class YouTubeCookieStrategyTests(unittest.TestCase):
 
     def test_player_response_failure_is_retryable(self):
         self.assertTrue(mod._retryable_youtube_error(RuntimeError("Failed to extract any player response")))
+
+    def test_antibot_error_without_cookies_is_actionable_and_sanitized(self):
+        raw = "ERROR: [youtube] secret-id: Sign in to confirm you're not a bot. Use --cookies"
+        with mock.patch.object(auth, "_ORIGINAL", side_effect=RuntimeError(raw)), \
+             mock.patch.object(auth, "_cookie_session_state", return_value="missing"):
+            with self.assertRaisesRegex(RuntimeError, "COOKIES_YT_B64") as caught:
+                auth.download_youtube_file_guarded("https://youtu.be/test")
+        self.assertNotIn("secret-id", str(caught.exception))
+        self.assertNotIn("--cookies", str(caught.exception))
+
+    def test_unknown_ytdlp_error_is_not_dumped_to_telegram(self):
+        raw = "ERROR: signed private URL https://example.invalid/token=secret"
+        with mock.patch.object(auth, "_ORIGINAL", side_effect=RuntimeError(raw)):
+            with self.assertRaisesRegex(RuntimeError, "não concluiu o download") as caught:
+                auth.download_youtube_file_guarded("https://youtu.be/test")
+        self.assertNotIn("token=secret", str(caught.exception))
 
 
 if __name__ == "__main__":

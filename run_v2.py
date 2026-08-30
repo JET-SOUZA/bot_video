@@ -12,7 +12,7 @@ import re
 import shutil
 import tempfile
 from pathlib import Path
-from urllib.parse import quote, urljoin, urlparse
+from urllib.parse import quote, unquote, urljoin, urlparse
 
 import requests
 import yt_dlp
@@ -49,6 +49,23 @@ GOOD_SHOPEE_HINTS = (
 )
 
 TRUSTED_SHOPEE_HINTS = GOOD_SHOPEE_HINTS
+
+
+def _extract_shopee_share_id(url: str, html: str = ""):
+    """Extract the complete post ID, including URL-encoded Base64 padding."""
+    try:
+        path = unquote(urlparse(url or "").path)
+        match = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", path)
+        if match:
+            return match.group(1)
+    except Exception:
+        pass
+    if html:
+        decoded_html = unquote(html)
+        match = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", decoded_html)
+        if match:
+            return match.group(1)
+    return None
 
 
 def _marked_candidate(path: str, url: str) -> bool:
@@ -257,11 +274,7 @@ def strict_extract_shopee_original(url: str):
     except Exception as exc:
         print(f"[JetBot Shopee] page fetch failed: {type(exc).__name__}: {exc}")
 
-    share_match = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", resolved)
-    if not share_match and html:
-        share_match = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", html)
-
-    share_id = share_match.group(1) if share_match else None
+    share_id = _extract_shopee_share_id(resolved, html)
     if share_id:
         for version in ("v4", "v2"):
             api_url = f"https://sv.shopee.com.br/api/{version}/share/video?shareVideoId={share_id}"

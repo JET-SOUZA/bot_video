@@ -361,10 +361,9 @@ def strict_extract_with_frontend_api(url):
         return clean
 
     resolved = runtime.app._resolve_shopee(url)
-    match = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", resolved)
-    if not match:
+    share_id = runtime._extract_shopee_share_id(resolved)
+    if not share_id:
         return None
-    share_id = match.group(1)
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) "

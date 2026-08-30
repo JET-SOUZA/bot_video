@@ -1,17 +1,14 @@
-"""JetBot V2 Shopee policy layer.
+"""JetBot V2 strict Shopee policy layer.
 
-The clean/original resolver always runs first. A public watermarked rendition may
-still be used as a fallback because the bot owner explicitly prefers a working
-download over a hard block, but that fallback is explicit in result metadata
-instead of being mislabeled as a clean/original source.
+Only a positively identified clean/original source may reach the downloader.
+Watermarked renditions are never used as a fallback, including when an
+environment variable is set accidentally in production.
 
-Set SHOPEE_ALLOW_MARKED_FALLBACK=0 to enforce clean-only behavior in production.
-Runtime bindings are applied explicitly by apply_runtime_policy(); importing this
-module alone no longer mutates jetbot_v2 global functions.
+Runtime bindings are applied explicitly by apply_runtime_policy(); importing
+this module alone no longer mutates jetbot_v2 global functions.
 """
 
 import contextvars
-import os
 import re
 from pathlib import Path
 from urllib.parse import urlparse
@@ -20,9 +17,7 @@ import run_v2 as runtime
 
 
 _ORIGINAL_EXTRACT = runtime.strict_extract_shopee_original
-_ALLOW_MARKED_FALLBACK = os.getenv("SHOPEE_ALLOW_MARKED_FALLBACK", "1").strip().lower() in {
-    "1", "true", "yes", "on"
-}
+_ALLOW_MARKED_FALLBACK = False
 _SOURCE_KIND = contextvars.ContextVar("jetbot_shopee_source_kind", default=None)
 _RUNTIME_APPLIED = False
 
@@ -108,10 +103,7 @@ def _fallback_shopee_media(url):
     except Exception as exc:
         print(f"[JetBot Shopee] fallback page fetch failed: {type(exc).__name__}: {exc}")
 
-    share_match = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", resolved)
-    if not share_match and html:
-        share_match = re.search(r"/share-video/([A-Za-z0-9=_\-]+)", html)
-    share_id = share_match.group(1) if share_match else None
+    share_id = runtime._extract_shopee_share_id(resolved, html)
 
     if share_id:
         for version in ("v4", "v2"):
@@ -152,17 +144,10 @@ def extract_shopee_prefer_original(url):
         print("[JetBot Shopee] source_kind=clean")
         return clean
 
-    if not _ALLOW_MARKED_FALLBACK:
-        print("[JetBot Shopee] original unavailable; marked fallback disabled by policy")
-        return None
-
-    fallback = _fallback_shopee_media(url)
-    if fallback:
-        _SOURCE_KIND.set("marked")
-        print("[JetBot Shopee] source_kind=marked_fallback")
-        return fallback
-
-    print("[JetBot Shopee] no playable Shopee media source found")
+    # Deliberately do not call _fallback_shopee_media here.  It remains a
+    # diagnostics helper for inspecting public payloads, but no marked or
+    # untrusted candidate can enter the production download path.
+    print("[JetBot Shopee] original unavailable; marked fallback blocked by strict policy")
     return None
 
 
@@ -175,14 +160,12 @@ def download_media_with_shopee_policy(url, uid):
             return result
         kind = _SOURCE_KIND.get()
         result = dict(result)
-        if kind == "marked":
-            result["source"] = "shopee-marked-fallback"
-            result["watermarked"] = True
-        elif kind == "clean":
+        if kind == "clean":
             result["source"] = "shopee-clean"
             result["watermarked"] = False
         else:
             result["source"] = "shopee-unknown"
+            result["watermarked"] = None
         return result
     finally:
         _SOURCE_KIND.reset(token)

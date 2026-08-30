@@ -11,6 +11,7 @@ import run_v2_fallback as entry
 class RuntimePatchOrderTests(unittest.TestCase):
     def test_importing_policy_module_does_not_apply_final_runtime(self):
         self.assertFalse(entry._RUNTIME_APPLIED)
+        self.assertFalse(entry._ALLOW_MARKED_FALLBACK)
 
     def test_telegram_fit_is_final_download_wrapper_after_explicit_apply(self):
         entry.apply_runtime_policy()

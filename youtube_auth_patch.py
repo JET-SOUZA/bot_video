@@ -37,6 +37,24 @@ def _cookie_session_state():
     return "anonymous"
 
 
+def _friendly_error(exc):
+    """Return a concise Telegram-safe error without yt-dlp internals/URLs."""
+    text = str(exc).lower()
+    if any(marker in text for marker in (
+        "private video", "this video is private", "vídeo privado",
+    )):
+        return "Este vídeo é privado e a conta configurada não tem acesso a ele."
+    if any(marker in text for marker in (
+        "video unavailable", "this video is unavailable", "not available in your country",
+    )):
+        return "Este vídeo não está disponível para download nessa região ou conta."
+    if any(marker in text for marker in (
+        "unsupported url", "is not a valid url", "invalid url",
+    )):
+        return "O link do YouTube é inválido ou não é suportado."
+    return "O YouTube não concluiu o download. Tente novamente; se persistir, renove os cookies no Render."
+
+
 def download_youtube_file_guarded(url, quality="1080", to_mp3=False, cookiefile=None):
     try:
         return _ORIGINAL(url, quality=quality, to_mp3=to_mp3, cookiefile=cookiefile)
@@ -63,7 +81,7 @@ def download_youtube_file_guarded(url, quality="1080", to_mp3=False, cookiefile=
             raise RuntimeError(
                 "O YouTube bloqueou o IP do Render e exigiu login. Adicione COOKIES_YT_B64 nos Secrets do Render para liberar os downloads."
             ) from None
-        raise
+        raise RuntimeError(_friendly_error(exc)) from None
 
 
 app.download_youtube_file_v2 = download_youtube_file_guarded
