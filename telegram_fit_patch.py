@@ -51,6 +51,30 @@ def _duration_seconds(path: Path) -> float:
     return max(float(value or 0), 0.1)
 
 
+def _video_metadata(path: Path) -> dict:
+    """Return the exact display metadata required by Telegram's sendVideo."""
+    proc = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=width,height:format=duration",
+            "-of", "json", str(path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=True,
+    )
+    payload = json.loads(proc.stdout or "{}")
+    stream = (payload.get("streams") or [{}])[0]
+    fmt = payload.get("format") or {}
+    width = int(stream.get("width") or 0)
+    height = int(stream.get("height") or 0)
+    duration = max(int(round(float(fmt.get("duration") or 0))), 1)
+    if width <= 0 or height <= 0:
+        raise RuntimeError("Não foi possível identificar a proporção do vídeo final.")
+    return {"width": width, "height": height, "duration": duration}
+
+
 def _fit_file(path: Path, max_mb: int) -> Path:
     limit_bytes = int(max_mb * 1024 * 1024)
     if path.stat().st_size <= limit_bytes:
@@ -126,6 +150,14 @@ def download_media_with_telegram_fit(url, uid):
         fitted = _fit_file(path, app.MAX_FILE_MB)
         result["path"] = str(fitted)
         result["telegram_fitted"] = True
+        path = fitted
+    if path.exists() and result.get("platform") == "twitter":
+        metadata = _video_metadata(path)
+        result.update(metadata)
+        print(
+            f"[JetBot Media] Telegram metadata width={metadata['width']} "
+            f"height={metadata['height']} duration={metadata['duration']}"
+        )
     return result
 
 

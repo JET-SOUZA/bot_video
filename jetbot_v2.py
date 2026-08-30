@@ -558,10 +558,16 @@ async def baixar_video(update, context):
             return
         await status.edit_text("📤 Enviando para o Telegram...")
         with path.open("rb") as media:
+            video_kwargs = {
+                "caption": "✅ Seu vídeo está aqui!",
+                "supports_streaming": True,
+            }
+            for field in ("width", "height", "duration"):
+                if result.get(field):
+                    video_kwargs[field] = result[field]
             await update.message.reply_video(
                 media,
-                caption="✅ Seu vídeo está aqui!",
-                supports_streaming=True,
+                **video_kwargs,
             )
         if not legacy.is_premium(uid):
             novo = legacy.incrementar_download(uid)
