@@ -8,9 +8,26 @@ import run_v2 as runtime
 
 
 class ShopeeStrictResolverTests(unittest.TestCase):
+    def setUp(self):
+        runtime._SHOPEE_SESSION_COOKIES.clear()
+
     def test_share_id_keeps_url_encoded_base64_padding(self):
         url = "https://sv.shopee.com.br/share-video/OSTRerv4CACv-DYYAAAAAA%3D%3D?c=share_web"
         self.assertEqual(runtime._extract_shopee_share_id(url), "OSTRerv4CACv-DYYAAAAAA==")
+
+    def test_shopee_cookie_payload_is_forwarded_to_frontend_api(self):
+        payload = ".shopee.com.br\tTRUE\t/\tTRUE\t0\tSPC_F\tdevice-cookie"
+        with mock.patch.object(runtime.app, "_cookie_payload", return_value=payload):
+            headers = runtime._augment_shopee_headers({})
+        self.assertEqual(headers["Cookie"], "SPC_F=device-cookie")
+
+    def test_page_response_cookies_are_reused(self):
+        response = mock.Mock()
+        response.cookies.get_dict.return_value = {"SPC_R_T_ID": "session-cookie"}
+        runtime._remember_shopee_response_cookies(response)
+        with mock.patch.object(runtime.app, "_cookie_payload", return_value=None):
+            headers = runtime._augment_shopee_headers({})
+        self.assertEqual(headers["Cookie"], "SPC_R_T_ID=session-cookie")
 
     """The strict clean-source layer must never classify marked media as clean.
 

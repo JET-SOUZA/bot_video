@@ -79,18 +79,40 @@ def _with_strategy(params, client, *, skip_webpage=False, force_pot=False, allow
     return opts
 
 
+def _with_any_available_format(params):
+    """Relax only the final retry when YouTube exposes a reduced format set.
+
+    Datacenter sessions can return valid player data while hiding the exact
+    resolution requested by the user.  The previous chain retried the same
+    impossible selector three times.  This last-resort selector downloads the
+    best playable stream instead of failing the whole request.
+    """
+    opts = copy.deepcopy(params)
+    if opts.get("format") != "bestaudio/best":
+        opts["format"] = "best/bestvideo*+bestaudio/bestvideo+bestaudio"
+        opts.pop("format_sort", None)
+    return opts
+
+
 def _strategy_chain(base):
     # As of Aug/2026 yt-dlp's default logged-in client (tv_downgraded) can
     # return "The page needs to be reloaded" for valid cookies. Upstream
     # recommends forcing default + web_embedded for cookie-authenticated use.
     # Avoid clients that explicitly do not support account cookies.
     if _has_cookie_auth(base):
+        any_available = _with_strategy(
+            _with_any_available_format(base),
+            ("web", "web_embedded"),
+            force_pot=True,
+            allow_missing_pot=True,
+        )
         return (
             ("auth-default-web-embedded", _with_strategy(base, ("default", "web_embedded"), force_pot=False)),
             ("auth-web-pot", _with_strategy(base, ("web", "web_embedded"), force_pot=True, allow_missing_pot=True)),
             ("auth-web-creator-pot", _with_strategy(base, "web_creator", force_pot=True, allow_missing_pot=True)),
+            ("auth-any-available", any_available),
         )
-    return (
+    anonymous = (
         ("web-safari", _with_strategy(base, "web_safari", force_pot=False)),
         ("mweb-pot", _with_strategy(base, "mweb", force_pot=True, allow_missing_pot=True)),
         ("mweb-pot-no-webpage", _with_strategy(base, "mweb", skip_webpage=True, force_pot=True, allow_missing_pot=True)),
@@ -98,6 +120,13 @@ def _strategy_chain(base):
         ("tv", _with_strategy(base, "tv", force_pot=False)),
         ("android-vr", _with_strategy(base, "android_vr", force_pot=True, allow_missing_pot=True)),
     )
+    any_available = _with_strategy(
+        _with_any_available_format(base),
+        "web_safari",
+        force_pot=True,
+        allow_missing_pot=True,
+    )
+    return anonymous + (("anonymous-any-available", any_available),)
 
 
 def _initial_strategy(base):

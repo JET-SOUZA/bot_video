@@ -99,7 +99,7 @@ def _probe_hp(page_url, share_id, headers):
         return _ORIGINAL_PROBE(page_url, share_id, headers)
 
     endpoint = urljoin("https://sv.shopee.com.br/", "api/v2/timeline/single")
-    request_headers = dict(headers or {})
+    request_headers = runtime._augment_shopee_headers(dict(headers or {}))
     request_headers.update({
         "Accept": "application/json, text/plain, */*",
         "Origin": "https://sv.shopee.com.br",

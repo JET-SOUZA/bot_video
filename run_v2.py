@@ -49,6 +49,43 @@ GOOD_SHOPEE_HINTS = (
 )
 
 TRUSTED_SHOPEE_HINTS = GOOD_SHOPEE_HINTS
+_SHOPEE_SESSION_COOKIES = {}
+
+
+def _cookies_from_netscape(payload: str):
+    cookies = {}
+    for raw_line in (payload or "").splitlines():
+        line = raw_line.strip()
+        if not line or (line.startswith("#") and not line.startswith("#HttpOnly_")):
+            continue
+        if line.startswith("#HttpOnly_"):
+            line = line[len("#HttpOnly_"):]
+        fields = line.split("\t")
+        if len(fields) < 7 or "shopee" not in fields[0].lower():
+            continue
+        name, value = fields[-2], fields[-1]
+        if name:
+            cookies[name] = value
+    return cookies
+
+
+def _augment_shopee_headers(headers: dict):
+    """Attach configured and page-issued cookies without ever logging values."""
+    cookies = _cookies_from_netscape(app._cookie_payload("shopee") or "")
+    cookies.update(_SHOPEE_SESSION_COOKIES)
+    if cookies:
+        headers["Cookie"] = "; ".join(f"{name}={value}" for name, value in cookies.items())
+    return headers
+
+
+def _remember_shopee_response_cookies(response):
+    try:
+        received = response.cookies.get_dict()
+    except Exception:
+        received = {}
+    if received:
+        _SHOPEE_SESSION_COOKIES.update(received)
+    return received
 
 
 def _extract_shopee_share_id(url: str, html: str = ""):
@@ -264,11 +301,14 @@ def strict_extract_shopee_original(url: str):
         "Accept": "text/html,application/json;q=0.9,*/*;q=0.8",
         "Referer": "https://sv.shopee.com.br/",
     }
+    _augment_shopee_headers(headers)
     candidates = []
     html = ""
 
     try:
         page = requests.get(resolved, timeout=15, headers=headers)
+        if _remember_shopee_response_cookies(page):
+            _augment_shopee_headers(headers)
         if page.ok:
             html = page.text
     except Exception as exc:

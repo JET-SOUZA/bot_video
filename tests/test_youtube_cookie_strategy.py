@@ -25,9 +25,25 @@ class YouTubeCookieStrategyTests(unittest.TestCase):
         labels = [label for label, _ in chain]
         joined = " ".join(labels)
         self.assertIn("auth-default-web-embedded", labels)
+        self.assertIn("auth-any-available", labels)
         self.assertNotIn("mweb", joined)
         self.assertNotIn("android-vr", joined)
         self.assertNotIn("tv", joined)
+
+    def test_final_authenticated_retry_relaxes_unavailable_video_format(self):
+        base = {
+            "cookiefile": "/tmp/youtube.cookies.txt",
+            "format": "bv*[height<=360]+ba/b[height<=360]/b",
+            "format_sort": ["res:360"],
+        }
+        chain = dict(mod._strategy_chain(base))
+        final = chain["auth-any-available"]
+        self.assertEqual(final["format"], "best/bestvideo*+bestaudio/bestvideo+bestaudio")
+        self.assertNotIn("format_sort", final)
+
+    def test_audio_retry_keeps_audio_only_selector(self):
+        relaxed = mod._with_any_available_format({"format": "bestaudio/best"})
+        self.assertEqual(relaxed["format"], "bestaudio/best")
 
     def test_player_response_failure_is_retryable(self):
         self.assertTrue(mod._retryable_youtube_error(RuntimeError("Failed to extract any player response")))

@@ -14,6 +14,28 @@ import jetbot_v2 as app
 _ORIGINAL_DOWNLOAD_MEDIA = app.download_media
 
 
+def _remux_for_telegram(path: Path) -> Path:
+    """Normalize MP4 timing/container metadata without re-encoding pixels.
+
+    X frequently serves fragmented MP4s. Telegram can display those with
+    duration 0:00 or the wrong canvas even though the encoded frames are fine.
+    A stream-copy remux preserves width, height, sample aspect ratio and audio.
+    """
+    output = path.with_name(path.stem + "-telegram-remux.mp4")
+    cmd = [
+        "ffmpeg", "-y", "-i", str(path),
+        "-map", "0:v:0", "-map", "0:a?",
+        "-c", "copy", "-movflags", "+faststart",
+        "-map_metadata", "0", str(output),
+    ]
+    subprocess.run(cmd, capture_output=True, text=True, timeout=120, check=True)
+    if not output.exists() or output.stat().st_size <= 0:
+        raise RuntimeError("O vídeo do X/Twitter não pôde ser normalizado para o Telegram.")
+    path.unlink(missing_ok=True)
+    print("[JetBot Media] X/Twitter remuxed for Telegram; streams and geometry preserved")
+    return output
+
+
 def _duration_seconds(path: Path) -> float:
     proc = subprocess.run(
         [
@@ -95,9 +117,13 @@ def download_media_with_telegram_fit(url, uid):
     if not isinstance(result, dict) or not result.get("path"):
         return result
     path = Path(result["path"])
+    result = dict(result)
+    if result.get("platform") == "twitter" and path.exists():
+        path = _remux_for_telegram(path)
+        result["path"] = str(path)
+        result["telegram_remuxed"] = True
     if path.exists() and path.stat().st_size > app.MAX_FILE_MB * 1024 * 1024:
         fitted = _fit_file(path, app.MAX_FILE_MB)
-        result = dict(result)
         result["path"] = str(fitted)
         result["telegram_fitted"] = True
     return result

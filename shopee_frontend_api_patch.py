@@ -330,7 +330,7 @@ def _probe_hp(page_url, share_id, headers):
         return None
 
     endpoint = urljoin("https://sv.shopee.com.br/", call["route"].lstrip("/"))
-    request_headers = dict(headers or {})
+    request_headers = runtime._augment_shopee_headers(dict(headers or {}))
     request_headers.update({
         "Accept": "application/json, text/plain, */*",
         "Content-Type": "application/json",
@@ -372,6 +372,7 @@ def strict_extract_with_frontend_api(url):
         "Accept": "text/html,application/json;q=0.9,*/*;q=0.8",
         "Referer": "https://sv.shopee.com.br/",
     }
+    runtime._augment_shopee_headers(headers)
     candidate = _probe_hp(resolved, share_id, headers)
     if candidate:
         print("[JetBot Shopee] frontend_api original source selected")
