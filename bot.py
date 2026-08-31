@@ -505,6 +505,18 @@ def _cleanup_pending():
     for k in to_del:
         del YT_PENDING[k]
 
+def _claim_yt_pending(token: str, uid: int):
+    """Atomically consume a YouTube selector token for its owner.
+
+    Telegram can deliver repeated callback clicks while a slow download is in
+    progress. Consuming the token before the first network await prevents the
+    same video from starting multiple fallback chains concurrently.
+    """
+    pending = YT_PENDING.get(token)
+    if not pending or pending.get("uid") != uid:
+        return None
+    return YT_PENDING.pop(token, None)
+
 def _build_yt_keyboard(token: str, is_premium_user: bool, used: int):
     row1 = [
         InlineKeyboardButton("360p", callback_data=f"yt_start:{token}:360"),
@@ -686,7 +698,6 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if query.from_user.id != pending.get("uid"):
             return await query.answer("Esses botões não são para você.", show_alert=True)
 
-        url = pending.get("url")
         to_mp3 = (quality == "mp3")
 
         # Limite diário para Free
@@ -697,6 +708,15 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"⚠️ Limite diário do YouTube atingido ({YT_FREE_LIMIT}).",
                     show_alert=True
                 )
+
+        # Claim immediately before the first await. A second click on the same
+        # keyboard now sees an expired token instead of launching a duplicate.
+        pending = _claim_yt_pending(token, uid)
+        if not pending:
+            return await query.message.reply_text(
+                "⚠️ Este download já foi iniciado. Envie o link novamente para tentar de novo."
+            )
+        url = pending.get("url")
 
         msg = await query.message.reply_text("⏳ Iniciando download... Por favor aguarde...")
 
