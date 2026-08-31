@@ -447,9 +447,13 @@ def build_youtube_ydl_options(output_dir: Path, prefix: str, quality: str, to_mp
         "quiet": True,
         "no_warnings": True,
         "restrictfilenames": True,
-        "retries": 3,
-        "fragment_retries": 3,
-        "socket_timeout": 25,
+        # The runtime already has a short, client-specific fallback chain.
+        # Retrying each failed extractor three times made a rejected request
+        # appear frozen for several minutes in Telegram.
+        "retries": 1,
+        "fragment_retries": 1,
+        "extractor_retries": 1,
+        "socket_timeout": 15,
     }
     if cookiefile:
         opts["cookiefile"] = cookiefile

@@ -33,6 +33,15 @@ class FunctionalParityTests(unittest.TestCase):
             self.assertIn(f"yt_start:tok:{quality}", callbacks)
         self.assertIn("ilimitados", keyboard[3][0].text)
 
+    def test_youtube_selector_token_can_only_be_claimed_once(self):
+        token = "single-use-token"
+        bot.legacy.YT_PENDING[token] = {"url": "https://youtu.be/test", "uid": 42, "ts": 1}
+        self.assertIsNone(bot.legacy._claim_yt_pending(token, 99))
+        self.assertIn(token, bot.legacy.YT_PENDING)
+        claimed = bot.legacy._claim_yt_pending(token, 42)
+        self.assertEqual(claimed["url"], "https://youtu.be/test")
+        self.assertIsNone(bot.legacy._claim_yt_pending(token, 42))
+
 
 class PlatformDetectionTests(unittest.TestCase):
     def test_supported_platforms(self):
@@ -69,10 +78,11 @@ class YoutubeMotorTests(unittest.TestCase):
         self.assertEqual(opts["postprocessors"][0]["key"], "FFmpegExtractAudio")
         self.assertEqual(opts["postprocessors"][0]["preferredcodec"], "mp3")
 
-    def test_runtime_patch_uses_web_safari_primary_and_bgutil_http(self):
+    def test_runtime_patch_uses_mweb_primary_and_bgutil_http(self):
         ydl = bot.yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True})
         args = ydl.params["extractor_args"]
-        self.assertIn("web_safari", args["youtube"]["player_client"])
+        self.assertEqual(args["youtube"]["player_client"], ["mweb"])
+        self.assertEqual(args["youtube"]["fetch_pot"], ["always"])
         self.assertEqual(args["youtubepot-bgutilhttp"]["base_url"], ["http://127.0.0.1:4416"])
 
 
@@ -150,6 +160,8 @@ class StartupAndDockerTests(unittest.TestCase):
         self.assertIn("run_v2_fallback", bootstrap)
         self.assertIn("SHOPEE_DIAGNOSTICS", bootstrap)
         self.assertIn("bgutil-ytdlp-pot-provider", requirements)
+        self.assertIn("bgutil-ytdlp-pot-provider==1.3.2", requirements)
+        self.assertIn("--branch 1.3.2", docker)
         self.assertIn("PYTHONPATH=/app", docker)
         self.assertIn('CMD ["sh", "-c"', docker)
 

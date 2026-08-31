@@ -4,7 +4,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends git ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-RUN git clone --depth 1 --branch 1.3.1 \
+RUN git clone --depth 1 --branch 1.3.2 \
     https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git \
     /root/bgutil-ytdlp-pot-provider
 

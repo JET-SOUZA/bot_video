@@ -14,21 +14,20 @@ import youtube_auth_patch as auth
 
 
 class YouTubeCookieStrategyTests(unittest.TestCase):
-    def test_cookie_auth_uses_upstream_recommended_clients_first(self):
+    def test_cookie_auth_uses_upstream_recommended_mweb_client_first(self):
         base = {"cookiefile": "/tmp/youtube.cookies.txt"}
         initial = mod._initial_strategy(base)
         clients = initial["extractor_args"]["youtube"]["player_client"]
-        self.assertEqual(clients, ["default", "web_embedded"])
+        self.assertEqual(clients, ["mweb"])
+        self.assertEqual(initial["extractor_args"]["youtube"]["fetch_pot"], ["always"])
 
     def test_authenticated_chain_retries_public_video_without_cookies(self):
         chain = mod._strategy_chain({"cookiefile": "/tmp/youtube.cookies.txt"})
         labels = [label for label, _ in chain]
-        joined = " ".join(labels)
-        self.assertEqual(labels[0], "anonymous-android-vr")
-        self.assertIn("auth-default-web-embedded", labels)
-        self.assertIn("auth-any-available", labels)
-        self.assertNotIn("mweb", joined)
-        self.assertNotIn("tv", joined)
+        self.assertEqual(labels[0], "auth-mweb-any-available")
+        self.assertIn("anonymous-android-vr", labels)
+        self.assertIn("auth-web-embedded", labels)
+        self.assertNotIn("auth-web-creator-pot", labels)
         public_retry = dict(chain)["anonymous-android-vr"]
         self.assertNotIn("cookiefile", public_retry)
         self.assertNotIn("cookiesfrombrowser", public_retry)
@@ -44,9 +43,10 @@ class YouTubeCookieStrategyTests(unittest.TestCase):
             "format_sort": ["res:360"],
         }
         chain = dict(mod._strategy_chain(base))
-        final = chain["auth-any-available"]
+        final = chain["auth-mweb-any-available"]
         self.assertEqual(final["format"], "best/bestvideo*+bestaudio/bestvideo+bestaudio")
         self.assertNotIn("format_sort", final)
+        self.assertEqual(final["extractor_args"]["youtube"]["player_client"], ["mweb"])
 
     def test_audio_retry_keeps_audio_only_selector(self):
         relaxed = mod._with_any_available_format({"format": "bestaudio/best"})
