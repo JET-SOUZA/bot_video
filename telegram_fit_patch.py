@@ -1,8 +1,9 @@
 """Prepare non-YouTube media for Telegram without changing its display ratio.
 
-The source file is otherwise left untouched. If it exceeds MAX_FILE_MB we
-re-encode at a calculated bitrate while preserving the display aspect ratio:
-no crop, no stretch, no blur and no decorative bars.
+X/Twitter media is converted to a conservative Telegram/iOS MP4 profile so the
+display ratio is baked into square pixels instead of depending on container
+metadata. Other oversized media is re-encoded only when MAX_FILE_MB requires
+it. There is no crop, stretch, blur or decorative padding.
 """
 
 import json
@@ -14,25 +15,35 @@ import jetbot_v2 as app
 _ORIGINAL_DOWNLOAD_MEDIA = app.download_media
 
 
-def _remux_for_telegram(path: Path) -> Path:
-    """Normalize MP4 timing/container metadata without re-encoding pixels.
+def _normalize_for_telegram(path: Path) -> Path:
+    """Bake the source display ratio into a standard Telegram/iOS MP4.
 
-    X frequently serves fragmented MP4s. Telegram can display those with
-    duration 0:00 or the wrong canvas even though the encoded frames are fine.
-    A stream-copy remux preserves width, height, sample aspect ratio and audio.
+    A stream-copy remux is not enough for every X rendition: Telegram can cache
+    or misread its pixel-aspect/rotation metadata and show a portrait frame as
+    a square. Re-encoding makes the displayed geometry unambiguous: H.264,
+    yuv420p, square pixels, no rotation tag and even frame dimensions.
     """
-    output = path.with_name(path.stem + "-telegram-remux.mp4")
+    output = path.with_name(path.stem + "-telegram-normalized.mp4")
     cmd = [
         "ffmpeg", "-y", "-i", str(path),
         "-map", "0:v:0", "-map", "0:a?",
-        "-c", "copy", "-movflags", "+faststart",
-        "-map_metadata", "0", str(output),
+        "-vf", (
+            "scale='trunc(iw*sar/2)*2':'trunc(ih/2)*2',setsar=1,"
+            "scale='min(1280,iw)':'min(1280,ih)':"
+            "force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1"
+        ),
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+        "-pix_fmt", "yuv420p", "-tag:v", "avc1",
+        "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart", "-avoid_negative_ts", "make_zero",
+        "-map_metadata", "-1", "-metadata:s:v:0", "rotate=0",
+        str(output),
     ]
-    subprocess.run(cmd, capture_output=True, text=True, timeout=120, check=True)
+    subprocess.run(cmd, capture_output=True, text=True, timeout=480, check=True)
     if not output.exists() or output.stat().st_size <= 0:
         raise RuntimeError("O vídeo do X/Twitter não pôde ser normalizado para o Telegram.")
     path.unlink(missing_ok=True)
-    print("[JetBot Media] X/Twitter remuxed for Telegram; streams and geometry preserved")
+    print("[JetBot Media] X/Twitter normalized to H.264/yuv420p with square pixels")
     return output
 
 
@@ -52,17 +63,14 @@ def _duration_seconds(path: Path) -> float:
 
 
 def _video_metadata(path: Path) -> dict:
-    """Inspect the final file for diagnostics and its reliable duration.
-
-    Width and height describe the encoded frame, not necessarily the displayed
-    orientation. A rotate/display-matrix tag can therefore make these values
-    the opposite of what Telegram should render. They are useful in logs, but
-    must not be forced into sendVideo; Telegram reads the final MP4 itself.
-    """
+    """Return safe sendVideo metadata from the normalized square-pixel MP4."""
     proc = subprocess.run(
         [
             "ffprobe", "-v", "error", "-select_streams", "v:0",
-            "-show_entries", "stream=width,height:format=duration",
+            "-show_entries", (
+                "stream=width,height,sample_aspect_ratio,display_aspect_ratio,"
+                "codec_name,pix_fmt:stream_side_data=rotation:format=duration"
+            ),
             "-of", "json", str(path),
         ],
         capture_output=True,
@@ -78,7 +86,18 @@ def _video_metadata(path: Path) -> dict:
     duration = max(int(round(float(fmt.get("duration") or 0))), 1)
     if width <= 0 or height <= 0:
         raise RuntimeError("Não foi possível identificar a proporção do vídeo final.")
-    return {"width": width, "height": height, "duration": duration}
+    sample_aspect_ratio = stream.get("sample_aspect_ratio") or "1:1"
+    if sample_aspect_ratio not in {"1:1", "N/A"}:
+        raise RuntimeError("O vídeo final ainda possui pixels não quadrados.")
+    return {
+        "width": width,
+        "height": height,
+        "duration": duration,
+        "sample_aspect_ratio": sample_aspect_ratio,
+        "display_aspect_ratio": stream.get("display_aspect_ratio") or "",
+        "codec_name": stream.get("codec_name") or "",
+        "pix_fmt": stream.get("pix_fmt") or "",
+    }
 
 
 def _fit_file(path: Path, max_mb: int) -> Path:
@@ -153,9 +172,9 @@ def download_media_with_telegram_fit(url, uid):
     path = Path(result["path"])
     result = dict(result)
     if result.get("platform") == "twitter" and path.exists():
-        path = _remux_for_telegram(path)
+        path = _normalize_for_telegram(path)
         result["path"] = str(path)
-        result["telegram_remuxed"] = True
+        result["telegram_normalized"] = True
     if path.exists() and path.stat().st_size > app.MAX_FILE_MB * 1024 * 1024:
         fitted = _fit_file(path, app.MAX_FILE_MB)
         result["path"] = str(fitted)
@@ -163,15 +182,14 @@ def download_media_with_telegram_fit(url, uid):
         path = fitted
     if path.exists() and result.get("platform") == "twitter":
         metadata = _video_metadata(path)
-        # Duration is safe to forward. Let Telegram derive the displayed width
-        # and height from the MP4 so rotation/display-matrix metadata is honored.
-        result.pop("width", None)
-        result.pop("height", None)
-        result["duration"] = metadata["duration"]
+        # This file has square pixels and no rotation metadata, so its encoded
+        # dimensions are now the exact display dimensions Telegram must use.
+        result.update({field: metadata[field] for field in ("width", "height", "duration")})
         print(
-            f"[JetBot Media] inspected encoded_width={metadata['width']} "
-            f"encoded_height={metadata['height']} duration={metadata['duration']}; "
-            "Telegram will detect display geometry"
+            f"[JetBot Media] Telegram geometry width={metadata['width']} "
+            f"height={metadata['height']} duration={metadata['duration']} "
+            f"sar={metadata['sample_aspect_ratio']} dar={metadata['display_aspect_ratio']} "
+            f"codec={metadata['codec_name']} pix_fmt={metadata['pix_fmt']}"
         )
     return result
 
