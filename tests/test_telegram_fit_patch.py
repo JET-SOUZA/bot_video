@@ -10,35 +10,37 @@ import telegram_fit_patch as patch
 
 
 class TelegramFitPatchTests(unittest.TestCase):
-    def test_twitter_is_remuxed_before_telegram_size_check(self):
+    def test_twitter_is_normalized_before_telegram_size_check(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "twitter.mp4"
             source.write_bytes(b"source")
-            remuxed = Path(tmp) / "twitter-telegram-remux.mp4"
-            remuxed.write_bytes(b"remuxed")
+            normalized = Path(tmp) / "twitter-telegram-normalized.mp4"
+            normalized.write_bytes(b"normalized")
             result = {"path": str(source), "platform": "twitter"}
             with mock.patch.object(patch, "_ORIGINAL_DOWNLOAD_MEDIA", return_value=result), \
-                 mock.patch.object(patch, "_remux_for_telegram", return_value=remuxed) as remux, \
-                 mock.patch.object(patch, "_video_metadata", return_value={"width": 720, "height": 1280, "duration": 88}):
+                 mock.patch.object(patch, "_normalize_for_telegram", return_value=normalized) as normalize, \
+                 mock.patch.object(patch, "_video_metadata", return_value={
+                     "width": 720, "height": 1280, "duration": 88,
+                     "sample_aspect_ratio": "1:1", "display_aspect_ratio": "9:16",
+                     "codec_name": "h264", "pix_fmt": "yuv420p",
+                 }):
                 final = patch.download_media_with_telegram_fit("https://x.com/u/status/1", 1)
-        remux.assert_called_once_with(source)
-        self.assertTrue(final["telegram_remuxed"])
-        self.assertTrue(final["path"].endswith("twitter-telegram-remux.mp4"))
-        self.assertNotIn("width", final)
-        self.assertNotIn("height", final)
-        self.assertEqual(final["duration"], 88)
+        normalize.assert_called_once_with(source)
+        self.assertTrue(final["telegram_normalized"])
+        self.assertTrue(final["path"].endswith("twitter-telegram-normalized.mp4"))
+        self.assertEqual((final["width"], final["height"], final["duration"]), (720, 1280, 88))
 
-    def test_handler_can_forward_duration_without_forcing_geometry(self):
+    def test_handler_forwards_normalized_geometry(self):
         source = (Path(__file__).resolve().parents[1] / "jetbot_v2.py").read_text(encoding="utf-8")
         self.assertIn('for field in ("width", "height", "duration")', source)
         self.assertIn("**video_kwargs", source)
 
-    def test_stale_geometry_from_downloader_is_removed(self):
+    def test_stale_geometry_from_downloader_is_replaced(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "twitter.mp4"
             source.write_bytes(b"source")
-            remuxed = Path(tmp) / "twitter-telegram-remux.mp4"
-            remuxed.write_bytes(b"remuxed")
+            normalized = Path(tmp) / "twitter-telegram-normalized.mp4"
+            normalized.write_bytes(b"normalized")
             result = {
                 "path": str(source),
                 "platform": "twitter",
@@ -46,13 +48,15 @@ class TelegramFitPatchTests(unittest.TestCase):
                 "height": 720,
             }
             with mock.patch.object(patch, "_ORIGINAL_DOWNLOAD_MEDIA", return_value=result), \
-                 mock.patch.object(patch, "_remux_for_telegram", return_value=remuxed), \
-                 mock.patch.object(patch, "_video_metadata", return_value={"width": 1280, "height": 720, "duration": 8}):
+                 mock.patch.object(patch, "_normalize_for_telegram", return_value=normalized), \
+                 mock.patch.object(patch, "_video_metadata", return_value={
+                     "width": 480, "height": 852, "duration": 280,
+                     "sample_aspect_ratio": "1:1", "display_aspect_ratio": "40:71",
+                     "codec_name": "h264", "pix_fmt": "yuv420p",
+                 }):
                 final = patch.download_media_with_telegram_fit("https://x.com/u/status/2", 1)
 
-        self.assertNotIn("width", final)
-        self.assertNotIn("height", final)
-        self.assertEqual(final["duration"], 8)
+        self.assertEqual((final["width"], final["height"], final["duration"]), (480, 852, 280))
 
 
 if __name__ == "__main__":
