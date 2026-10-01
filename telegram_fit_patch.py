@@ -1,8 +1,8 @@
-"""Shrink oversized non-YouTube media only when Telegram's bot limit requires it.
+"""Prepare non-YouTube media for Telegram without changing its display ratio.
 
 The source file is otherwise left untouched. If it exceeds MAX_FILE_MB we
-re-encode at a calculated bitrate while preserving the exact frame dimensions
-and sample aspect ratio: no crop, no stretch, no blur and no decorative bars.
+re-encode at a calculated bitrate while preserving the display aspect ratio:
+no crop, no stretch, no blur and no decorative bars.
 """
 
 import json
@@ -52,7 +52,13 @@ def _duration_seconds(path: Path) -> float:
 
 
 def _video_metadata(path: Path) -> dict:
-    """Return the exact display metadata required by Telegram's sendVideo."""
+    """Inspect the final file for diagnostics and its reliable duration.
+
+    Width and height describe the encoded frame, not necessarily the displayed
+    orientation. A rotate/display-matrix tag can therefore make these values
+    the opposite of what Telegram should render. They are useful in logs, but
+    must not be forced into sendVideo; Telegram reads the final MP4 itself.
+    """
     proc = subprocess.run(
         [
             "ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -91,6 +97,10 @@ def _fit_file(path: Path, max_mb: int) -> Path:
     cmd = [
         "ffmpeg", "-y", "-i", str(path),
         "-map", "0:v:0", "-map", "0:a?",
+        "-vf", (
+            "scale='min(1280,iw)':'min(1280,ih)':"
+            "force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1"
+        ),
         "-c:v", "libx264", "-preset", "veryfast",
         "-b:v", str(video_bps), "-maxrate", str(int(video_bps * 1.12)),
         "-bufsize", str(int(video_bps * 2)),
@@ -153,10 +163,15 @@ def download_media_with_telegram_fit(url, uid):
         path = fitted
     if path.exists() and result.get("platform") == "twitter":
         metadata = _video_metadata(path)
-        result.update(metadata)
+        # Duration is safe to forward. Let Telegram derive the displayed width
+        # and height from the MP4 so rotation/display-matrix metadata is honored.
+        result.pop("width", None)
+        result.pop("height", None)
+        result["duration"] = metadata["duration"]
         print(
-            f"[JetBot Media] Telegram metadata width={metadata['width']} "
-            f"height={metadata['height']} duration={metadata['duration']}"
+            f"[JetBot Media] inspected encoded_width={metadata['width']} "
+            f"encoded_height={metadata['height']} duration={metadata['duration']}; "
+            "Telegram will detect display geometry"
         )
     return result
 
