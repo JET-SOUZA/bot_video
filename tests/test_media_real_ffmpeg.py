@@ -54,6 +54,20 @@ def _ensure_size(path: Path, minimum_bytes: int):
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg/ffprobe unavailable")
 class RealMediaFidelityTests(unittest.TestCase):
+    def test_twitter_normalization_bakes_portrait_geometry_into_standard_mp4(self):
+        with tempfile.TemporaryDirectory() as td:
+            source = Path(td) / "twitter-portrait.mp4"
+            _make_fixture(source, 480, 852)
+
+            output = telegram_fit_patch._normalize_for_telegram(source)
+            video, audio = _probe(output)
+
+            self.assertEqual((video["width"], video["height"]), (480, 852))
+            self.assertEqual(video["sample_aspect_ratio"], "1:1")
+            self.assertEqual(video["codec_name"], "h264")
+            self.assertEqual(video["pix_fmt"], "yuv420p")
+            self.assertTrue(audio, "audio stream must survive Telegram normalization")
+
     def test_oversized_video_preserves_geometry_and_audio_for_common_ratios(self):
         cases = [(360, 640), (480, 480), (640, 360)]  # 9:16, 1:1, 16:9
         for width, height in cases:
