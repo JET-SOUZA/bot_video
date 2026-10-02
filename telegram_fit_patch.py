@@ -15,6 +15,32 @@ import jetbot_v2 as app
 _ORIGINAL_DOWNLOAD_MEDIA = app.download_media
 
 
+def _transcode_timeout_seconds(duration: float) -> int:
+    """Allow slow Render CPUs enough time without leaving ffmpeg unbounded."""
+    return min(3600, max(900, int(duration * 6) + 120))
+
+
+def _run_ffmpeg(cmd: list[str], output: Path, duration: float, operation: str) -> None:
+    timeout = _transcode_timeout_seconds(duration)
+    try:
+        subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=True)
+    except subprocess.TimeoutExpired as exc:
+        output.unlink(missing_ok=True)
+        print(
+            f"[JetBot Media] ffmpeg timeout operation={operation} "
+            f"duration={duration:.1f}s timeout={timeout}s"
+        )
+        raise RuntimeError(
+            "O processamento deste vídeo demorou além do limite. "
+            "Tente novamente em alguns minutos."
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        output.unlink(missing_ok=True)
+        stderr_tail = (exc.stderr or "")[-1200:].replace("\n", " | ")
+        print(f"[JetBot Media] ffmpeg failed operation={operation} error={stderr_tail}")
+        raise RuntimeError("Não foi possível preparar este vídeo para o Telegram.") from exc
+
+
 def _normalize_for_telegram(path: Path) -> Path:
     """Bake the source display ratio into a standard Telegram/iOS MP4.
 
@@ -23,6 +49,7 @@ def _normalize_for_telegram(path: Path) -> Path:
     a square. Re-encoding makes the displayed geometry unambiguous: H.264,
     yuv420p, square pixels, no rotation tag and even frame dimensions.
     """
+    duration = _duration_seconds(path)
     output = path.with_name(path.stem + "-telegram-normalized.mp4")
     cmd = [
         "ffmpeg", "-y", "-i", str(path),
@@ -32,14 +59,14 @@ def _normalize_for_telegram(path: Path) -> Path:
             "scale='min(1280,iw)':'min(1280,ih)':"
             "force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1"
         ),
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
         "-pix_fmt", "yuv420p", "-tag:v", "avc1",
         "-c:a", "aac", "-b:a", "128k",
         "-movflags", "+faststart", "-avoid_negative_ts", "make_zero",
         "-map_metadata", "-1", "-metadata:s:v:0", "rotate=0",
         str(output),
     ]
-    subprocess.run(cmd, capture_output=True, text=True, timeout=480, check=True)
+    _run_ffmpeg(cmd, output, duration, "twitter-normalize")
     if not output.exists() or output.stat().st_size <= 0:
         raise RuntimeError("O vídeo do X/Twitter não pôde ser normalizado para o Telegram.")
     path.unlink(missing_ok=True)
@@ -120,7 +147,7 @@ def _fit_file(path: Path, max_mb: int) -> Path:
             "scale='min(1280,iw)':'min(1280,ih)':"
             "force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1"
         ),
-        "-c:v", "libx264", "-preset", "veryfast",
+        "-c:v", "libx264", "-preset", "ultrafast",
         "-b:v", str(video_bps), "-maxrate", str(int(video_bps * 1.12)),
         "-bufsize", str(int(video_bps * 2)),
         "-c:a", "aac", "-b:a", "128k",
@@ -128,7 +155,7 @@ def _fit_file(path: Path, max_mb: int) -> Path:
         "-map_metadata", "0",
         str(output),
     ]
-    subprocess.run(cmd, capture_output=True, text=True, timeout=240, check=True)
+    _run_ffmpeg(cmd, output, duration, "telegram-fit")
 
     if output.exists() and output.stat().st_size <= limit_bytes:
         print(
@@ -149,7 +176,7 @@ def _fit_file(path: Path, max_mb: int) -> Path:
     retry_cmd[retry_cmd.index(str(int(video_bps * 1.12)))] = str(int(retry_video_bps * 1.12))
     retry_cmd[retry_cmd.index(str(int(video_bps * 2)))] = str(int(retry_video_bps * 2))
     retry_cmd.append(str(retry))
-    subprocess.run(retry_cmd, capture_output=True, text=True, timeout=240, check=True)
+    _run_ffmpeg(retry_cmd, retry, duration, "telegram-fit-retry")
     if output.exists():
         output.unlink(missing_ok=True)
     if retry.exists() and retry.stat().st_size <= limit_bytes:
