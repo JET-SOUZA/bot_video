@@ -10,6 +10,24 @@ import telegram_fit_patch as patch
 
 
 class TelegramFitPatchTests(unittest.TestCase):
+    def test_transcode_timeout_scales_for_long_videos(self):
+        self.assertEqual(patch._transcode_timeout_seconds(30), 900)
+        self.assertEqual(patch._transcode_timeout_seconds(280), 1800)
+        self.assertEqual(patch._transcode_timeout_seconds(3600), 3600)
+
+    def test_ffmpeg_timeout_is_cleaned_up_and_hidden_from_user(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "partial.mp4"
+            output.write_bytes(b"partial")
+            with mock.patch.object(
+                patch.subprocess,
+                "run",
+                side_effect=patch.subprocess.TimeoutExpired(["ffmpeg"], 900),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "demorou além do limite"):
+                    patch._run_ffmpeg(["ffmpeg"], output, 30, "test")
+            self.assertFalse(output.exists())
+
     def test_twitter_is_normalized_before_telegram_size_check(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "twitter.mp4"
