@@ -1,0 +1,21 @@
+name: JetBot V2 Source Backup
+
+on:
+  push:
+    branches: [jetbot-v2]
+
+jobs:
+  package-source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create source ZIP
+        run: |
+          zip -r JeTbot_video_codigo_completo_V2.zip . -x '.git/*'
+      - name: Upload source ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: jetbot-v2-source
+          path: JeTbot_video_codigo_completo_V2.zip
+          if-no-files-found: error
+          retention-days: 7

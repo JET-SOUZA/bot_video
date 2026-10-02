@@ -1,0 +1,15 @@
+# Secrets / cookies
+cookies*.txt
+*.cookies.txt
+.env
+.env.*
+
+# Runtime data
+__pycache__/
+*.py[cod]
+downloads/
+
+# Editors / OS
+.DS_Store
+.vscode/
+.idea/
