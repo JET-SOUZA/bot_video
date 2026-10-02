@@ -557,7 +557,16 @@ async def baixar_video(update, context):
     )
     result = None
     try:
-        result = await asyncio.to_thread(download_media, url, uid)
+        loop = asyncio.get_running_loop()
+
+        def _report_progress(text):
+            future = asyncio.run_coroutine_threadsafe(status.edit_text(text), loop)
+            try:
+                future.result(timeout=10)
+            except Exception:
+                pass
+
+        result = await asyncio.to_thread(download_media, url, uid, _report_progress)
         path = Path(result["path"])
         if path.stat().st_size > MAX_FILE_MB * 1024 * 1024:
             await status.edit_text(

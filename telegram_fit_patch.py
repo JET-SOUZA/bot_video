@@ -7,6 +7,7 @@ it. There is no crop, stretch, blur or decorative padding.
 """
 
 import json
+import secrets
 import subprocess
 from pathlib import Path
 
@@ -74,6 +75,38 @@ def _normalize_for_telegram(path: Path) -> Path:
     return output
 
 
+def _remux_standard_twitter_video(path: Path) -> Path:
+    """Create a cache-busting Telegram MP4 without re-encoding its streams.
+
+    X already serves the common progressive rendition as H.264/yuv420p with
+    square pixels.  Re-encoding that file is unnecessary on Render's 0.15 CPU
+    free instance.  A unique metadata value prevents Telegram from reusing an
+    older cached upload whose dimensions may have been inferred incorrectly.
+    """
+    output = path.with_name(
+        f"{path.stem}-telegram-{secrets.token_hex(4)}.mp4"
+    )
+    cmd = [
+        "ffmpeg", "-y", "-i", str(path),
+        "-map", "0:v:0", "-map", "0:a?",
+        "-c", "copy", "-movflags", "+faststart",
+        "-map_metadata", "-1",
+        "-metadata", f"comment=jetbot-{secrets.token_hex(8)}",
+        "-metadata:s:v:0", "rotate=0",
+        str(output),
+    ]
+    try:
+        subprocess.run(cmd, capture_output=True, text=True, timeout=120, check=True)
+    except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
+        output.unlink(missing_ok=True)
+        raise RuntimeError("Não foi possível preparar este vídeo para o Telegram.") from exc
+    if not output.exists() or output.stat().st_size <= 0:
+        raise RuntimeError("O vídeo do X/Twitter não pôde ser preparado para o Telegram.")
+    path.unlink(missing_ok=True)
+    print("[JetBot Media] X/Twitter fast-remuxed with cache-busting metadata")
+    return output
+
+
 def _duration_seconds(path: Path) -> float:
     proc = subprocess.run(
         [
@@ -125,6 +158,17 @@ def _video_metadata(path: Path) -> dict:
         "codec_name": stream.get("codec_name") or "",
         "pix_fmt": stream.get("pix_fmt") or "",
     }
+
+
+def _is_standard_telegram_mp4(metadata: dict) -> bool:
+    """Whether Telegram can receive the source without a pixel re-encode."""
+    return (
+        metadata.get("codec_name") == "h264"
+        and metadata.get("pix_fmt") == "yuv420p"
+        and metadata.get("sample_aspect_ratio") in {"1:1", "N/A"}
+        and int(metadata.get("width") or 0) > 0
+        and int(metadata.get("height") or 0) > 0
+    )
 
 
 def _fit_file(path: Path, max_mb: int) -> Path:
@@ -192,14 +236,21 @@ def _fit_file(path: Path, max_mb: int) -> Path:
     raise RuntimeError("Não consegui reduzir o arquivo para o limite do Telegram sem alterar a proporção.")
 
 
-def download_media_with_telegram_fit(url, uid):
+def download_media_with_telegram_fit(url, uid, progress_callback=None):
     result = _ORIGINAL_DOWNLOAD_MEDIA(url, uid)
     if not isinstance(result, dict) or not result.get("path"):
         return result
     path = Path(result["path"])
     result = dict(result)
     if result.get("platform") == "twitter" and path.exists():
-        path = _normalize_for_telegram(path)
+        if progress_callback:
+            progress_callback("⏳ Corrigindo a proporção para o Telegram...")
+        source_metadata = _video_metadata(path)
+        if _is_standard_telegram_mp4(source_metadata):
+            path = _remux_standard_twitter_video(path)
+            result["telegram_fast_remuxed"] = True
+        else:
+            path = _normalize_for_telegram(path)
         result["path"] = str(path)
         result["telegram_normalized"] = True
     if path.exists() and path.stat().st_size > app.MAX_FILE_MB * 1024 * 1024:
