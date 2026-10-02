@@ -54,6 +54,21 @@ def _ensure_size(path: Path, minimum_bytes: int):
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg/ffprobe unavailable")
 class RealMediaFidelityTests(unittest.TestCase):
+    def test_standard_twitter_video_uses_fast_remux_without_geometry_change(self):
+        with tempfile.TemporaryDirectory() as td:
+            source = Path(td) / "twitter-standard.mp4"
+            _make_fixture(source, 480, 852)
+            before_video, before_audio = _probe(source)
+
+            output = telegram_fit_patch._remux_standard_twitter_video(source)
+            after_video, after_audio = _probe(output)
+
+            self.assertEqual(after_video["codec_name"], before_video["codec_name"])
+            self.assertEqual((after_video["width"], after_video["height"]), (480, 852))
+            self.assertEqual(after_video["sample_aspect_ratio"], "1:1")
+            self.assertTrue(before_audio)
+            self.assertTrue(after_audio)
+
     def test_twitter_normalization_bakes_portrait_geometry_into_standard_mp4(self):
         with tempfile.TemporaryDirectory() as td:
             source = Path(td) / "twitter-portrait.mp4"
