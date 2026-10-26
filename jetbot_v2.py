@@ -12,10 +12,12 @@ import re
 import secrets
 import shutil
 import tempfile
+import threading
 import time
 import traceback
 from pathlib import Path
 from urllib.parse import unquote
+from http.cookiejar import MozillaCookieJar
 
 import requests
 import yt_dlp
@@ -361,7 +363,59 @@ def build_general_ydl_options(temp_dir: Path, platform: str, cookiefile=None):
     return opts
 
 
+class InstagramDownloadError(yt_dlp.utils.DownloadError):
+    """A safe, actionable message that can be shown in Telegram."""
+
+
+_INSTAGRAM_LOCK = threading.Lock()
+_INSTAGRAM_RETRY_AT = 0.0
+
+
+def _instagram_has_session(cookiefile):
+    if not cookiefile:
+        return False
+    jar = MozillaCookieJar(cookiefile)
+    try:
+        jar.load(ignore_discard=True, ignore_expires=True)
+        return any(
+            cookie.name == "sessionid" and cookie.value
+            and cookie.domain.lstrip(".") in {"instagram.com", "www.instagram.com"}
+            and (cookie.expires in (None, 0) or not cookie.is_expired())
+            for cookie in jar
+        )
+    except (OSError, ValueError):
+        return False
+
+
 def download_media(url: str, uid: int):
+    """Serialize Instagram requests and stop all retries during a rate limit."""
+    global _INSTAGRAM_RETRY_AT
+    if detect_platform(url) != "instagram":
+        return _download_media(url, uid)
+    if not _INSTAGRAM_LOCK.acquire(blocking=False):
+        raise InstagramDownloadError("Já há um download do Instagram em andamento. Aguarde e tente novamente.")
+    try:
+        remaining = _INSTAGRAM_RETRY_AT - time.monotonic()
+        if remaining > 0:
+            minutes = max(1, int((remaining + 59) // 60))
+            raise InstagramDownloadError(f"O Instagram limitou as requisições. Aguarde cerca de {minutes} minuto(s) antes de tentar novamente.")
+        try:
+            return _download_media(url, uid)
+        except InstagramDownloadError:
+            raise
+        except yt_dlp.utils.DownloadError as exc:
+            message = str(exc).lower()
+            if "429" in message or "too many requests" in message:
+                _INSTAGRAM_RETRY_AT = time.monotonic() + 15 * 60
+                raise InstagramDownloadError("O Instagram limitou as requisições (429). O bot pausou os downloads do Instagram por 15 minutos; esse prazo não garante a liberação pelo Instagram.") from exc
+            if any(word in message for word in ("cookies", "login", "log in", "sign in")):
+                raise InstagramDownloadError("Este conteúdo exige uma sessão válida do Instagram. O administrador precisa configurar ou renovar os cookies do Instagram na hospedagem.") from exc
+            raise
+    finally:
+        _INSTAGRAM_LOCK.release()
+
+
+def _download_media(url: str, uid: int):
     """Motor V2 para todas as plataformas exceto YouTube."""
     platform = detect_platform(url)
     if platform == "youtube":
@@ -376,6 +430,12 @@ def download_media(url: str, uid: int):
     opts = build_general_ydl_options(temp_dir, platform, cookiefile)
 
     try:
+        if platform == "instagram":
+            # Stories are authenticated content. Do not repeatedly hit the site
+            # anonymously when the required session is absent or expired.
+            if re.match(r"https?://(?:www\.)?instagram\.com/stories/", url) and not _instagram_has_session(cookiefile):
+                raise InstagramDownloadError("Para baixar Stories, o administrador precisa configurar uma sessão válida do Instagram na hospedagem (COOKIES_IG_B64).")
+            opts.update(retries=0, extractor_retries=0, fragment_retries=0, sleep_interval_requests=2)
         # Shopee: fonte original primeiro. Evita baixar a composição visual com
         # logo/tarja e dispensa qualquer delogo/borrão posterior.
         if platform == "shopee":
@@ -417,8 +477,8 @@ def download_media(url: str, uid: int):
             direct_url = None
             if platform == "shopee":
                 direct_url = legacy.extrair_video_shopee(original_url)
-            elif platform == "instagram":
-                direct_url = legacy.extrair_video_instagram(original_url)
+            # The legacy Instagram fallback uses the same extractor again,
+            # losing the temporary cookiefile and repeating rate-limited calls.
             if not direct_url:
                 raise
             media = _download_direct(direct_url, temp_dir / f"{platform}-fallback.mp4")
@@ -595,8 +655,10 @@ async def baixar_video(update, context):
             pass
     except yt_dlp.utils.DownloadError as exc:
         message = str(exc).lower()
-        if "cookies" in message or "login" in message or "sign in" in message:
-            text = "A plataforma exigiu autenticação/cookies. Configure-os apenas nos Secrets do Render."
+        if isinstance(exc, InstagramDownloadError):
+            text = str(exc)
+        elif "cookies" in message or "login" in message or "sign in" in message:
+            text = "A plataforma exigiu autenticação. O administrador precisa configurar ou renovar os cookies na hospedagem."
         else:
             text = "Não foi possível baixar esse link. Ele pode ser privado, removido ou protegido."
         await status.edit_text(f"❌ {text}")
